@@ -130,7 +130,7 @@ public struct Utterance: Codable, Sendable, Identifiable {
     public var speakerName: String
     public let start: Double
     public let end: Double
-    public let text: String
+    public var text: String
     public var words: [WordTiming]
     
     public init(

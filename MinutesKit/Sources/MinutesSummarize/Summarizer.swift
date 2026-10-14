@@ -36,9 +36,6 @@ public final class Summarizer: Sendable {
         var actionItems: [ActionItem] = []
         var topics: [Topic] = []
         var questions: [String] = []
-        
-        let lower = transcriptText.lowercased()
-        
         // Scan for key patterns
         for u in utterances {
             let t = u.text

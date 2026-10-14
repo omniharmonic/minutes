@@ -24,8 +24,38 @@ public final class MinutesStore: @unchecked Sendable {
         }
     }
     
-    private func migrate() throws {
-        let schema = """
+    public func currentSchemaVersion() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return Int(sqlite3_column_int(stmt, 0))
+            }
+        }
+        return 0
+    }
+    
+    public func setSchemaVersion(_ version: Int) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let sql = "PRAGMA user_version = \(version);"
+        var err: UnsafeMutablePointer<CChar>?
+        if sqlite3_exec(db, sql, nil, nil, &err) != SQLITE_OK {
+            let msg = err != nil ? String(cString: err!) : "Unknown error"
+            sqlite3_free(err)
+            throw NSError(domain: "MinutesStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Set version failed: \(msg)"])
+        }
+    }
+    
+    public func migrate() throws {
+        let pragmas = """
+        PRAGMA journal_mode = WAL;
+        PRAGMA foreign_keys = ON;
+        """
+        
+        let schemaV1 = """
         CREATE TABLE IF NOT EXISTS person (
             id TEXT PRIMARY KEY,
             display_name TEXT NOT NULL,
@@ -77,7 +107,7 @@ public final class MinutesStore: @unchecked Sendable {
             FOREIGN KEY(meeting_id) REFERENCES meeting(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS utterance (
-            id INTEGER PRIMARY KEY,
+            id INTEGER NOT NULL,
             meeting_id TEXT NOT NULL,
             cluster_id TEXT NOT NULL,
             speaker_name TEXT NOT NULL,
@@ -85,6 +115,7 @@ public final class MinutesStore: @unchecked Sendable {
             end REAL NOT NULL,
             text TEXT NOT NULL,
             words_json TEXT NOT NULL DEFAULT '[]',
+            PRIMARY KEY(meeting_id, id),
             FOREIGN KEY(meeting_id) REFERENCES meeting(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS summary (
@@ -104,10 +135,68 @@ public final class MinutesStore: @unchecked Sendable {
         defer { lock.unlock() }
         
         var err: UnsafeMutablePointer<CChar>?
-        if sqlite3_exec(db, schema, nil, nil, &err) != SQLITE_OK {
+        if sqlite3_exec(db, pragmas, nil, nil, &err) != SQLITE_OK {
+            let msg = err != nil ? String(cString: err!) : "Unknown error"
+            sqlite3_free(err)
+            throw NSError(domain: "MinutesStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Pragma setup failed: \(msg)"])
+        }
+        
+        if sqlite3_exec(db, schemaV1, nil, nil, &err) != SQLITE_OK {
             let msg = err != nil ? String(cString: err!) : "Unknown error"
             sqlite3_free(err)
             throw NSError(domain: "MinutesStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Migration failed: \(msg)"])
+        }
+        
+        // Safe migration for utterance composite primary key if upgrading from legacy schema
+        var tableInfoStmt: OpaquePointer?
+        var hasUtterance = false
+        var isCompositePK = false
+        if sqlite3_prepare_v2(db, "PRAGMA table_info(utterance);", -1, &tableInfoStmt, nil) == SQLITE_OK {
+            while sqlite3_step(tableInfoStmt) == SQLITE_ROW {
+                hasUtterance = true
+                if let nameCol = sqlite3_column_text(tableInfoStmt, 1) {
+                    let col = String(cString: nameCol)
+                    let isPk = sqlite3_column_int(tableInfoStmt, 5) > 0
+                    if col == "meeting_id" && isPk {
+                        isCompositePK = true
+                    }
+                }
+            }
+            sqlite3_finalize(tableInfoStmt)
+        }
+        
+        if hasUtterance && !isCompositePK {
+            let migrateUtteranceSQL = """
+            CREATE TABLE utterance_v2 (
+                id INTEGER NOT NULL,
+                meeting_id TEXT NOT NULL,
+                cluster_id TEXT NOT NULL,
+                speaker_name TEXT NOT NULL,
+                start REAL NOT NULL,
+                end REAL NOT NULL,
+                text TEXT NOT NULL,
+                words_json TEXT NOT NULL DEFAULT '[]',
+                PRIMARY KEY(meeting_id, id),
+                FOREIGN KEY(meeting_id) REFERENCES meeting(id) ON DELETE CASCADE
+            );
+            INSERT OR IGNORE INTO utterance_v2 (id, meeting_id, cluster_id, speaker_name, start, end, text, words_json)
+                SELECT id, meeting_id, cluster_id, speaker_name, start, end, text, words_json FROM utterance;
+            DROP TABLE utterance;
+            ALTER TABLE utterance_v2 RENAME TO utterance;
+            """
+            _ = sqlite3_exec(db, migrateUtteranceSQL, nil, nil, nil)
+        }
+        
+        // Upgrade user_version to at least 1 if not set
+        var vStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &vStmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(vStmt) }
+            if sqlite3_step(vStmt) == SQLITE_ROW {
+                let currentVer = sqlite3_column_int(vStmt, 0)
+                if currentVer < 1 {
+                    _ = sqlite3_exec(db, "PRAGMA user_version = 1;", nil, nil, nil)
+                }
+            }
         }
     }
     
@@ -192,6 +281,63 @@ public final class MinutesStore: @unchecked Sendable {
         return nil
     }
     
+    public func listMeetings() -> [Meeting] {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var list: [Meeting] = []
+        let sql = "SELECT id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes FROM meeting ORDER BY started_at DESC"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let mId = String(cString: sqlite3_column_text(stmt, 0))
+                let title = String(cString: sqlite3_column_text(stmt, 1))
+                let started = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
+                var ended: Date? = nil
+                if sqlite3_column_type(stmt, 3) != SQLITE_NULL {
+                    ended = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3))
+                }
+                let platform = String(cString: sqlite3_column_text(stmt, 4))
+                var cal: String? = nil
+                if sqlite3_column_type(stmt, 5) != SQLITE_NULL {
+                    cal = String(cString: sqlite3_column_text(stmt, 5))
+                }
+                var conf: String? = nil
+                if sqlite3_column_type(stmt, 6) != SQLITE_NULL {
+                    conf = String(cString: sqlite3_column_text(stmt, 6))
+                }
+                let status = String(cString: sqlite3_column_text(stmt, 7))
+                var dev: String? = nil
+                if sqlite3_column_type(stmt, 8) != SQLITE_NULL {
+                    dev = String(cString: sqlite3_column_text(stmt, 8))
+                }
+                var notes: String? = nil
+                if sqlite3_column_type(stmt, 9) != SQLITE_NULL {
+                    notes = String(cString: sqlite3_column_text(stmt, 9))
+                }
+                list.append(Meeting(id: mId, title: title, startedAt: started, endedAt: ended, platform: platform, calendarEventId: cal, conferenceURL: conf, status: status, device: dev, userNotes: notes))
+            }
+        }
+        return list
+    }
+    
+    public func deleteMeeting(id: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = "DELETE FROM meeting WHERE id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                let msg = String(cString: sqlite3_errmsg(db))
+                throw NSError(domain: "MinutesStore", code: 6, userInfo: [NSLocalizedDescriptionKey: "Delete meeting error: \(msg)"])
+            }
+        }
+    }
+    
     // MARK: - Person & Voiceprints
     
     public func savePerson(_ p: Person) throws {
@@ -269,7 +415,7 @@ public final class MinutesStore: @unchecked Sendable {
             
             // Pack Float array to byte buffer
             let byteCount = vp.vector.count * MemoryLayout<Float>.size
-            vp.vector.withUnsafeBytes { rawBuffer in
+            _ = vp.vector.withUnsafeBytes { rawBuffer in
                 sqlite3_bind_blob(stmt, 5, rawBuffer.baseAddress, Int32(byteCount), SQLITE_TRANSIENT)
             }
             sqlite3_bind_double(stmt, 6, vp.speechSeconds)
@@ -314,6 +460,70 @@ public final class MinutesStore: @unchecked Sendable {
         return list
     }
     
+    public func getVoiceprint(id: String) -> Voiceprint? {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = "SELECT id, person_id, model, dim, vector, speech_seconds, created_at FROM voiceprint WHERE id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                let vId = String(cString: sqlite3_column_text(stmt, 0))
+                let personId = String(cString: sqlite3_column_text(stmt, 1))
+                let model = String(cString: sqlite3_column_text(stmt, 2))
+                let dim = Int(sqlite3_column_int(stmt, 3))
+                
+                let blob = sqlite3_column_blob(stmt, 4)
+                let bytes = sqlite3_column_bytes(stmt, 4)
+                var vector: [Float] = []
+                if let blob = blob, bytes > 0 {
+                    let floatCount = Int(bytes) / MemoryLayout<Float>.size
+                    let floatBuffer = blob.bindMemory(to: Float.self, capacity: floatCount)
+                    vector = Array(UnsafeBufferPointer(start: floatBuffer, count: floatCount))
+                }
+                
+                let speechSeconds = sqlite3_column_double(stmt, 5)
+                let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
+                return Voiceprint(id: vId, personId: personId, model: model, dim: dim, vector: vector, speechSeconds: speechSeconds, createdAt: createdAt)
+            }
+        }
+        return nil
+    }
+    
+    public func deleteVoiceprint(id: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = "DELETE FROM voiceprint WHERE id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                let msg = String(cString: sqlite3_errmsg(db))
+                throw NSError(domain: "MinutesStore", code: 7, userInfo: [NSLocalizedDescriptionKey: "Delete voiceprint error: \(msg)"])
+            }
+        }
+    }
+    
+    public func deleteSpeakerCluster(id: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = "DELETE FROM speaker_cluster WHERE id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                let msg = String(cString: sqlite3_errmsg(db))
+                throw NSError(domain: "MinutesStore", code: 8, userInfo: [NSLocalizedDescriptionKey: "Delete cluster error: \(msg)"])
+            }
+        }
+    }
+    
     // MARK: - Speaker Clusters & Utterances
     
     public func saveSpeakerClusters(_ clusters: [SpeakerCluster]) throws {
@@ -325,6 +535,8 @@ public final class MinutesStore: @unchecked Sendable {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             label = excluded.label,
+            centroid = excluded.centroid,
+            speech_seconds = excluded.speech_seconds,
             person_id = excluded.person_id,
             assignment = excluded.assignment,
             confidence = excluded.confidence;
@@ -340,7 +552,7 @@ public final class MinutesStore: @unchecked Sendable {
                 
                 let byteCount = c.centroid.count * MemoryLayout<Float>.size
                 if byteCount > 0 {
-                    c.centroid.withUnsafeBytes { rawBuffer in
+                    _ = c.centroid.withUnsafeBytes { rawBuffer in
                         sqlite3_bind_blob(stmt, 5, rawBuffer.baseAddress, Int32(byteCount), SQLITE_TRANSIENT)
                     }
                 } else {
@@ -397,8 +609,15 @@ public final class MinutesStore: @unchecked Sendable {
         defer { lock.unlock() }
         
         let sql = """
-        INSERT OR REPLACE INTO utterance (id, meeting_id, cluster_id, speaker_name, start, end, text, words_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO utterance (id, meeting_id, cluster_id, speaker_name, start, end, text, words_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(meeting_id, id) DO UPDATE SET
+            cluster_id = excluded.cluster_id,
+            speaker_name = excluded.speaker_name,
+            start = excluded.start,
+            end = excluded.end,
+            text = excluded.text,
+            words_json = excluded.words_json;
         """
         for u in utterances {
             var stmt: OpaquePointer?

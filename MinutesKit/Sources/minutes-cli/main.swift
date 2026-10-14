@@ -184,7 +184,7 @@ struct MinutesCLI {
                 let email = targetIdentity.contains("@") ? NameResolver.cleanEmail(targetIdentity) : ""
                 
                 // Find or create Person
-                var people = store.listPeople()
+                let people = store.listPeople()
                 var person = people.first(where: { p in
                     p.displayName.lowercased() == displayName.lowercased() || (p.emails.contains(email) && !email.isEmpty)
                 })

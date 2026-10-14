@@ -1,6 +1,22 @@
 import Foundation
 import MinutesCore
 
+public struct DiarizationConfig: Sendable, Codable {
+    public var pauseThreshold: Double // default 1.8 seconds, range 0.5 - 3.5
+    public var aggressiveness: Double // range 0.0 - 1.0
+    public var minSpeechDuration: Double // default 0.3 seconds
+    
+    public init(
+        pauseThreshold: Double = 1.8,
+        aggressiveness: Double = 0.5,
+        minSpeechDuration: Double = 0.3
+    ) {
+        self.pauseThreshold = pauseThreshold
+        self.aggressiveness = aggressiveness
+        self.minSpeechDuration = minSpeechDuration
+    }
+}
+
 public struct TimedSpeakerSegment: Sendable {
     public let speakerId: String
     public let start: Double
@@ -35,21 +51,34 @@ public enum TranscriptMerger {
         meetingId: String,
         words: [ASRWord],
         segments: [TimedSpeakerSegment],
-        speakerNames: [String: String] = [:] // speakerId -> display name
+        speakerNames: [String: String] = [:], // speakerId -> display name
+        config: DiarizationConfig = DiarizationConfig()
     ) -> [Utterance] {
         if words.isEmpty {
             return []
         }
         
-        var attributedWords: [(word: ASRWord, speakerId: String)] = []
-        var lastSpeakerId = segments.first?.speakerId ?? "Speaker 1"
+        // Filter out segments shorter than minSpeechDuration (noise rejection)
+        let validSegments = segments.filter { ($0.end - $0.start) >= config.minSpeechDuration }
+        let activeSegments = validSegments
         
-        for w in words {
+        // Filter out low confidence non-speech noise words based on aggressiveness
+        let noiseConfidenceFloor = config.aggressiveness * 0.25
+        let speechWords = words.filter { $0.confidence >= noiseConfidenceFloor }
+        
+        if speechWords.isEmpty {
+            return []
+        }
+        
+        var attributedWords: [(word: ASRWord, speakerId: String)] = []
+        var lastSpeakerId = activeSegments.first?.speakerId ?? "Speaker 1"
+        
+        for w in speechWords {
             // Find segment with maximum overlap
             var bestSpeaker = lastSpeakerId
             var maxOverlap = 0.0
             
-            for seg in segments {
+            for seg in activeSegments {
                 let overlapStart = max(w.start, seg.start)
                 let overlapEnd = min(w.end, seg.end)
                 let overlap = max(0.0, overlapEnd - overlapStart)
@@ -59,8 +88,14 @@ public enum TranscriptMerger {
                 }
             }
             
-            lastSpeakerId = bestSpeaker
-            attributedWords.append((word: w, speakerId: bestSpeaker))
+            // Require minimal overlap if aggressiveness is elevated, else maintain speaker
+            let minOverlapRequired = 0.02 * config.aggressiveness
+            if maxOverlap > minOverlapRequired {
+                lastSpeakerId = bestSpeaker
+                attributedWords.append((word: w, speakerId: bestSpeaker))
+            } else {
+                attributedWords.append((word: w, speakerId: lastSpeakerId))
+            }
         }
         
         // Group consecutive words into utterances
@@ -72,6 +107,9 @@ public enum TranscriptMerger {
         var lastEnd = 0.0
         var utteranceId = 1
         
+        // Effective pause threshold dynamically adjusted by pauseThreshold setting
+        let effectivePauseThreshold = max(0.4, config.pauseThreshold)
+        
         for item in attributedWords {
             let spk = item.speakerId
             let w = item.word
@@ -79,7 +117,7 @@ public enum TranscriptMerger {
             
             // Check if we need to start a new utterance
             let speakerChanged = spk != currentSpeaker && !currentSpeaker.isEmpty
-            let longPause = pause > 1.8 && !currentWords.isEmpty
+            let longPause = pause > effectivePauseThreshold && !currentWords.isEmpty
             
             if speakerChanged || longPause {
                 let text = currentWords.map { $0.word }.joined(separator: " ")

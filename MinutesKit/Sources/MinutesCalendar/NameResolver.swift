@@ -14,12 +14,20 @@ public enum NameResolver {
     /// E.g. "ana.lopez@stripe.com" -> "Ana Lopez", "john_doe@apple.com" -> "John Doe"
     public static func resolveDisplayName(fromEmail rawEmail: String) -> String {
         let email = cleanEmail(rawEmail)
-        guard let localPart = email.components(separatedBy: "@").first, !localPart.isEmpty else {
-            return rawEmail
+        guard !email.isEmpty else {
+            return "Unknown"
+        }
+        guard var localPart = email.components(separatedBy: "@").first, !localPart.isEmpty else {
+            return "Unknown"
+        }
+        
+        // Strip sub-addressing / plus-addressing tags (e.g. user+tag@domain.com -> user)
+        if let base = localPart.components(separatedBy: "+").first, !base.isEmpty {
+            localPart = base
         }
         
         // Split by '.', '_', '-'
-        let separators = CharacterSet(charactersIn: "._-+")
+        let separators = CharacterSet(charactersIn: "._-")
         let tokens = localPart.components(separatedBy: separators).filter { !$0.isEmpty }
         
         if tokens.isEmpty {
