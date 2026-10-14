@@ -11,6 +11,7 @@ public struct Meeting: Codable, Sendable, Identifiable {
     public var status: String // "recorded", "transcribing", "diarizing", "needs_review", "summarizing", "finalized", "failed"
     public var device: String?
     public var userNotes: String?
+    public var audioPath: String?
     
     public init(
         id: String = UUID().uuidString.prefix(8).lowercased(),
@@ -22,7 +23,8 @@ public struct Meeting: Codable, Sendable, Identifiable {
         conferenceURL: String? = nil,
         status: String = "recorded",
         device: String? = nil,
-        userNotes: String? = nil
+        userNotes: String? = nil,
+        audioPath: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -34,6 +36,7 @@ public struct Meeting: Codable, Sendable, Identifiable {
         self.status = status
         self.device = device
         self.userNotes = userNotes
+        self.audioPath = audioPath
     }
 }
 

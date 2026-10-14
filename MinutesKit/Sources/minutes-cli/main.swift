@@ -70,18 +70,51 @@ struct MinutesCLI {
                     exit(1)
                 }
                 
+                // Validate decodeability and duration through AudioDecoder
+                let decoded: DecodedAudio
+                do {
+                    decoded = try AudioDecoder.decode(fileURL: URL(fileURLWithPath: audioPath))
+                } catch {
+                    print("Error: Failed to decode audio file: \(error.localizedDescription)")
+                    exit(1)
+                }
+                
                 var title = (audioPath as NSString).lastPathComponent
                 if let tIdx = args.firstIndex(of: "--title"), tIdx + 1 < args.count {
                     title = args[tIdx + 1]
                 }
                 
-                let meeting = Meeting(title: title, status: "recorded")
+                // Copy into app-managed storage
+                let storageDir: String
+                if let dataDir = dataDir {
+                    storageDir = (dataDir as NSString).appendingPathComponent("audio")
+                } else {
+                    let home = FileManager.default.homeDirectoryForCurrentUser.path
+                    storageDir = (home as NSString).appendingPathComponent("Library/Application Support/Minutes/audio")
+                }
+                try FileManager.default.createDirectory(atPath: storageDir, withIntermediateDirectories: true)
+                let ext = (audioPath as NSString).pathExtension.isEmpty ? "wav" : (audioPath as NSString).pathExtension
+                let meetingId = UUID().uuidString.prefix(8).lowercased()
+                let destAudioPath = (storageDir as NSString).appendingPathComponent("\(meetingId).\(ext)")
+                if FileManager.default.fileExists(atPath: destAudioPath) {
+                    try? FileManager.default.removeItem(atPath: destAudioPath)
+                }
+                try FileManager.default.copyItem(atPath: audioPath, toPath: destAudioPath)
+                
+                let meeting = Meeting(
+                    id: String(meetingId),
+                    title: title,
+                    status: "recorded",
+                    audioPath: destAudioPath
+                )
                 try store.saveMeeting(meeting)
                 print("✅ Imported meeting: \(meeting.id) (\"\(meeting.title)\")")
+                print("   Duration: \(String(format: "%.1f", decoded.duration))s, Sample rate: \(Int(decoded.sampleRate))Hz")
+                print("   Managed audio stored at: \(destAudioPath)")
                 
             case "process":
                 guard args.count >= 3 else {
-                    print("Usage: minutes-cli process <meeting-id> [--transcript <path>] [--data-dir <path>]")
+                    print("Usage: minutes-cli process <meeting-id> [--audio <path>] [--transcript <path>] [--data-dir <path>]")
                     exit(1)
                 }
                 let meetingId = args[2]
@@ -92,77 +125,58 @@ struct MinutesCLI {
                 
                 print("Processing meeting \(meetingId)...")
                 
-                // Read transcript text if provided
-                var text = ""
-                if let tIdx = args.firstIndex(of: "--transcript"), tIdx + 1 < args.count {
-                    let transcriptPath = args[tIdx + 1]
-                    guard FileManager.default.fileExists(atPath: transcriptPath) else {
-                        print("Error: Transcript file not found at \(transcriptPath)")
-                        exit(1)
+                // Locate audio file
+                var audioURL: URL? = nil
+                if let path = meeting.audioPath, FileManager.default.fileExists(atPath: path) {
+                    audioURL = URL(fileURLWithPath: path)
+                } else if let aIdx = args.firstIndex(of: "--audio"), aIdx + 1 < args.count {
+                    let aPath = args[aIdx + 1]
+                    if FileManager.default.fileExists(atPath: aPath) {
+                        audioURL = URL(fileURLWithPath: aPath)
                     }
-                    guard let fileText = try? String(contentsOfFile: transcriptPath, encoding: .utf8),
-                          !fileText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        print("Error: Transcript file is empty at \(transcriptPath)")
-                        exit(1)
-                    }
-                    text = fileText
-                } else {
-                    print("Error: No transcript provided. Pass --transcript <path> to process meeting text.")
+                }
+                
+                guard let validAudioURL = audioURL else {
+                    print("Error: No audio file found for meeting \(meetingId). Please re-import with valid audio.")
                     exit(1)
                 }
                 
-                // Split text into words
-                let rawWords = text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-                var asrWords: [ASRWord] = []
-                var currentTime = 0.5
-                for w in rawWords {
-                    let dur = Double(w.count) * 0.08 + 0.15
-                    asrWords.append(ASRWord(word: w, start: currentTime, end: currentTime + dur))
-                    currentTime += dur + 0.05
+                var fallbackTranscriptURL: URL? = nil
+                if let tIdx = args.firstIndex(of: "--transcript"), tIdx + 1 < args.count {
+                    let transcriptPath = args[tIdx + 1]
+                    if FileManager.default.fileExists(atPath: transcriptPath) {
+                        fallbackTranscriptURL = URL(fileURLWithPath: transcriptPath)
+                    }
                 }
                 
-                let totalDuration = currentTime
-                
-                // Create speaker clusters scoped to this meeting
-                let cluster1 = SpeakerCluster(
-                    id: "c_\(meetingId)_1",
-                    meetingId: meetingId,
-                    trackId: "track_1",
-                    label: "Speaker 1",
-                    centroid: (0..<256).map { i in Float(sin(Double(i) * 0.1)) },
-                    speechSeconds: totalDuration * 0.7,
-                    assignment: "suggested",
-                    confidence: 0.85
-                )
-                
-                let cluster2 = SpeakerCluster(
-                    id: "c_\(meetingId)_2",
-                    meetingId: meetingId,
-                    trackId: "track_1",
-                    label: "Speaker 2",
-                    centroid: (0..<256).map { i in Float(cos(Double(i) * 0.1)) },
-                    speechSeconds: totalDuration * 0.3,
-                    assignment: "suggested",
-                    confidence: 0.70
-                )
-                
-                try store.saveSpeakerClusters([cluster1, cluster2])
-                
-                // Diarization segments alternating between cluster1 and cluster2
-                var segments: [TimedSpeakerSegment] = []
-                var segStart = 0.0
-                while segStart < totalDuration {
-                    let segEnd = min(totalDuration, segStart + 25.0)
-                    let spkId = (Int(segStart / 25.0) % 2 == 0) ? cluster1.id : cluster2.id
-                    segments.append(TimedSpeakerSegment(speakerId: spkId, start: segStart, end: segEnd))
-                    segStart = segEnd
+                let orchestrator = PipelineOrchestrator()
+                let result: PipelineResult
+                do {
+                    result = try await orchestrator.process(
+                        meetingId: meetingId,
+                        audioURL: validAudioURL,
+                        fallbackTranscriptURL: fallbackTranscriptURL
+                    )
+                } catch {
+                    print("Error in speech processing pipeline: \(error.localizedDescription)")
+                    var failedM = meeting
+                    failedM.status = "failed"
+                    try? store.saveMeeting(failedM)
+                    exit(1)
                 }
                 
-                // Check existing voiceprints for matching
+                // Match acoustic clusters against enrolled people and voiceprints
                 let people = store.listPeople()
                 let voiceprints = store.listVoiceprints()
+                let attendees = store.listPeopleForMeeting(meetingId: meetingId)
+                let attendeeIds = Set(attendees.map { $0.id })
                 let matcher = SpeakerMatcher()
-                let matches = matcher.match(clusters: [cluster1, cluster2], people: people, voiceprints: voiceprints, attendeePersonIds: [])
+                let matches = matcher.match(
+                    clusters: result.clusters,
+                    people: people,
+                    voiceprints: voiceprints,
+                    attendeePersonIds: attendeeIds
+                )
                 
                 var speakerNames: [String: String] = [:]
                 for m in matches {
@@ -171,23 +185,30 @@ struct MinutesCLI {
                     }
                 }
                 
-                // Merge into utterances
-                let utterances = TranscriptMerger.merge(
-                    meetingId: meetingId,
-                    words: asrWords,
-                    segments: segments,
-                    speakerNames: speakerNames
-                )
-                try store.saveUtterances(utterances)
+                var finalUtterances = result.utterances
+                for i in 0..<finalUtterances.count {
+                    if let name = speakerNames[finalUtterances[i].clusterId] {
+                        finalUtterances[i].speakerName = name
+                    }
+                }
+                
+                try store.saveSpeakerClusters(result.clusters)
+                try store.saveUtterances(finalUtterances)
                 
                 var updatedM = meeting
                 updatedM.status = "needs_review"
                 try store.saveMeeting(updatedM)
                 
                 print("✅ Processed meeting \(meetingId):")
-                print("   Words: \(asrWords.count)")
-                print("   Utterances: \(utterances.count)")
-                print("   Clusters: 2 (Speaker 1, Speaker 2)")
+                print("   Audio duration: \(String(format: "%.1f", result.audioDuration))s")
+                print("   Speech duration: \(String(format: "%.1f", result.speechDuration))s")
+                print("   Words: \(result.words.count)")
+                print("   Utterances: \(finalUtterances.count)")
+                print("   Acoustic clusters: \(result.clusters.count)")
+                for c in result.clusters {
+                    let assigned = speakerNames[c.id] ?? c.label
+                    print("     - \(c.label): \(assigned) (\(String(format: "%.1f", c.speechSeconds))s speech)")
+                }
                 
             case "assign":
                 guard args.count >= 4 else {

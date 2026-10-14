@@ -83,7 +83,8 @@ public final class MinutesStore: @unchecked Sendable {
             conference_url TEXT,
             status TEXT NOT NULL,
             device TEXT,
-            user_notes TEXT
+            user_notes TEXT,
+            audio_path TEXT
         );
         CREATE TABLE IF NOT EXISTS meeting_attendee (
             meeting_id TEXT NOT NULL,
@@ -187,6 +188,23 @@ public final class MinutesStore: @unchecked Sendable {
             _ = sqlite3_exec(db, migrateUtteranceSQL, nil, nil, nil)
         }
         
+        // Safe migration for meeting audio_path if upgrading from legacy schema
+        var meetingInfoStmt: OpaquePointer?
+        var hasAudioPath = false
+        if sqlite3_prepare_v2(db, "PRAGMA table_info(meeting);", -1, &meetingInfoStmt, nil) == SQLITE_OK {
+            while sqlite3_step(meetingInfoStmt) == SQLITE_ROW {
+                if let nameCol = sqlite3_column_text(meetingInfoStmt, 1) {
+                    if String(cString: nameCol) == "audio_path" {
+                        hasAudioPath = true
+                    }
+                }
+            }
+            sqlite3_finalize(meetingInfoStmt)
+        }
+        if !hasAudioPath {
+            _ = sqlite3_exec(db, "ALTER TABLE meeting ADD COLUMN audio_path TEXT;", nil, nil, nil)
+        }
+        
         // Upgrade user_version to at least 1 if not set
         var vStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &vStmt, nil) == SQLITE_OK {
@@ -207,13 +225,14 @@ public final class MinutesStore: @unchecked Sendable {
         defer { lock.unlock() }
         
         let sql = """
-        INSERT INTO meeting (id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO meeting (id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes, audio_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             ended_at = excluded.ended_at,
             status = excluded.status,
-            user_notes = excluded.user_notes;
+            user_notes = excluded.user_notes,
+            audio_path = COALESCE(excluded.audio_path, meeting.audio_path);
         """
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
@@ -232,6 +251,7 @@ public final class MinutesStore: @unchecked Sendable {
             sqlite3_bind_text(stmt, 8, (m.status as NSString).utf8String, -1, nil)
             if let dev = m.device { sqlite3_bind_text(stmt, 9, (dev as NSString).utf8String, -1, nil) } else { sqlite3_bind_null(stmt, 9) }
             if let notes = m.userNotes { sqlite3_bind_text(stmt, 10, (notes as NSString).utf8String, -1, nil) } else { sqlite3_bind_null(stmt, 10) }
+            if let aPath = m.audioPath { sqlite3_bind_text(stmt, 11, (aPath as NSString).utf8String, -1, nil) } else { sqlite3_bind_null(stmt, 11) }
             
             if sqlite3_step(stmt) != SQLITE_DONE {
                 let msg = String(cString: sqlite3_errmsg(db))
@@ -244,7 +264,7 @@ public final class MinutesStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         
-        let sql = "SELECT id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes FROM meeting WHERE id = ?"
+        let sql = "SELECT id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes, audio_path FROM meeting WHERE id = ?"
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(stmt) }
@@ -275,7 +295,11 @@ public final class MinutesStore: @unchecked Sendable {
                 if sqlite3_column_type(stmt, 9) != SQLITE_NULL {
                     notes = String(cString: sqlite3_column_text(stmt, 9))
                 }
-                return Meeting(id: mId, title: title, startedAt: started, endedAt: ended, platform: platform, calendarEventId: cal, conferenceURL: conf, status: status, device: dev, userNotes: notes)
+                var audioPath: String? = nil
+                if sqlite3_column_type(stmt, 10) != SQLITE_NULL {
+                    audioPath = String(cString: sqlite3_column_text(stmt, 10))
+                }
+                return Meeting(id: mId, title: title, startedAt: started, endedAt: ended, platform: platform, calendarEventId: cal, conferenceURL: conf, status: status, device: dev, userNotes: notes, audioPath: audioPath)
             }
         }
         return nil
@@ -286,7 +310,7 @@ public final class MinutesStore: @unchecked Sendable {
         defer { lock.unlock() }
         
         var list: [Meeting] = []
-        let sql = "SELECT id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes FROM meeting ORDER BY started_at DESC"
+        let sql = "SELECT id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes, audio_path FROM meeting ORDER BY started_at DESC"
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(stmt) }
@@ -316,7 +340,11 @@ public final class MinutesStore: @unchecked Sendable {
                 if sqlite3_column_type(stmt, 9) != SQLITE_NULL {
                     notes = String(cString: sqlite3_column_text(stmt, 9))
                 }
-                list.append(Meeting(id: mId, title: title, startedAt: started, endedAt: ended, platform: platform, calendarEventId: cal, conferenceURL: conf, status: status, device: dev, userNotes: notes))
+                var audioPath: String? = nil
+                if sqlite3_column_type(stmt, 10) != SQLITE_NULL {
+                    audioPath = String(cString: sqlite3_column_text(stmt, 10))
+                }
+                list.append(Meeting(id: mId, title: title, startedAt: started, endedAt: ended, platform: platform, calendarEventId: cal, conferenceURL: conf, status: status, device: dev, userNotes: notes, audioPath: audioPath))
             }
         }
         return list

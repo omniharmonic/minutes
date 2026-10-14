@@ -87,7 +87,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MinutesSpeechTests",
-            dependencies: ["MinutesSpeech"]
+            dependencies: ["MinutesSpeech", "MinutesSpeakerID"]
         ),
         .testTarget(
             name: "MinutesSpeakerIDTests",
