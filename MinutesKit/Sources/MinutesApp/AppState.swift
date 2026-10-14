@@ -127,7 +127,7 @@ public final class AppState: ObservableObject {
             meetingId: meeting.id,
             trackId: "track_1",
             label: "Benjamin Life",
-            centroid: (0..<256).map { _ in Float.random(in: -0.1...0.1) },
+            centroid: VectorMath.l2Normalize((0..<256).map { _ in Float.random(in: -0.1...0.1) }),
             speechSeconds: max(10.0, recordingDuration * 0.6),
             assignment: "suggested",
             confidence: 0.90
@@ -137,7 +137,7 @@ public final class AppState: ObservableObject {
             meetingId: meeting.id,
             trackId: "track_1",
             label: "Alex Rivers",
-            centroid: (0..<256).map { _ in Float.random(in: -0.1...0.1) },
+            centroid: VectorMath.l2Normalize((0..<256).map { _ in Float.random(in: -0.1...0.1) }),
             speechSeconds: max(5.0, recordingDuration * 0.4),
             assignment: "suggested",
             confidence: 0.85

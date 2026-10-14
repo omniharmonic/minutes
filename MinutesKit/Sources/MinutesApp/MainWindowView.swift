@@ -114,6 +114,7 @@ public struct MainWindowView: View {
         case .voiceprintHub:
             VoiceprintHubView(
                 store: appState.store,
+                meetingId: appState.selectedMeetingId,
                 voiceprints: appState.voiceprints,
                 people: appState.currentAttendees,
                 clusters: appState.currentClusters,

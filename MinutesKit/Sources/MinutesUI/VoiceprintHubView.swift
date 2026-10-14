@@ -33,15 +33,18 @@ public struct VoiceprintHubView: View {
     @State private var customTestVector: [Float] = []
     
     private let clusterManager = ClusterManager()
+    private let meetingId: String?
     
     public init(
         store: MinutesStore,
+        meetingId: String? = nil,
         voiceprints: [Voiceprint] = [],
         people: [Person] = [],
         clusters: [SpeakerCluster] = [],
         utterances: [Utterance] = []
     ) {
         self.store = store
+        self.meetingId = meetingId
         self._voiceprints = State(initialValue: voiceprints)
         self._people = State(initialValue: people)
         self._clusters = State(initialValue: clusters)
@@ -755,9 +758,10 @@ public struct VoiceprintHubView: View {
     private func refreshData() {
         voiceprints = store.listVoiceprints()
         people = store.listPeople()
-        if let firstMeeting = store.listMeetings().first {
-            clusters = store.listSpeakerClusters(meetingId: firstMeeting.id)
-            utterances = store.listUtterances(meetingId: firstMeeting.id)
+        let targetId = meetingId ?? store.listMeetings().first?.id
+        if let targetId = targetId {
+            clusters = store.listSpeakerClusters(meetingId: targetId)
+            utterances = store.listUtterances(meetingId: targetId)
         }
     }
 }

@@ -120,7 +120,7 @@ public final class ParachuteAdapter: ExportAdapter {
     public static func mintTokenFromCLI() -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", "export PATH=\"$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; /Users/benjaminlife/.bun/bin/parachute auth mint-token --scope vault:default:write --ephemeral"]
+        process.arguments = ["-c", "export PATH=\"$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; command -v parachute >/dev/null 2>&1 && parachute auth mint-token --scope vault:default:write --ephemeral || ($HOME/.bun/bin/parachute auth mint-token --scope vault:default:write --ephemeral 2>/dev/null)"]
         let pipe = Pipe()
         process.standardOutput = pipe
         do {
