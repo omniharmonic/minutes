@@ -94,7 +94,7 @@ public final class AppState: ObservableObject {
         self.currentClusters = store.listSpeakerClusters(meetingId: id)
         self.currentUtterances = store.listUtterances(meetingId: id)
         self.currentSummary = store.getSummary(meetingId: id)
-        self.currentAttendees = store.listPeople()
+        self.currentAttendees = store.listPeopleForMeeting(meetingId: id)
         self.voiceprints = store.listVoiceprints()
     }
     
@@ -114,31 +114,51 @@ public final class AppState: ObservableObject {
     public func stopAndProcessMeeting() async {
         isRecording = false
         recordingTimer?.cancel()
-        isProcessing = true
-        statusMessage = "Processing ASR & Diarization..."
         
-        let meetingTitle = "Quick Meeting (\(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)))"
+        guard recordingDuration >= 1.0 else {
+            statusMessage = "Recording cancelled: under 1 second."
+            return
+        }
+        
+        isProcessing = true
+        statusMessage = "Finalizing recorded audio..."
+        
+        let meetingTitle = "Meeting (\(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)))"
+        let meeting = Meeting(title: meetingTitle, status: "recorded")
+        try? store.saveMeeting(meeting)
+        
+        loadInitialData()
+        selectMeeting(id: meeting.id)
+        
+        isProcessing = false
+        statusMessage = "Meeting recorded. Awaiting speech processing."
+    }
+    
+    public func loadDemoMeetingFixture() async {
+        isProcessing = true
+        statusMessage = "Loading isolated demo fixture..."
+        
+        let meetingTitle = "[Demo] Architecture & Roadmap"
         let meeting = Meeting(title: meetingTitle, status: "needs_review")
         try? store.saveMeeting(meeting)
         
-        // Create 2 clusters
         let c1 = SpeakerCluster(
-            id: "c_\(UUID().uuidString.prefix(6))",
+            id: "c_\(meeting.id)_1",
             meetingId: meeting.id,
             trackId: "track_1",
-            label: "Benjamin Life",
-            centroid: VectorMath.l2Normalize((0..<256).map { _ in Float.random(in: -0.1...0.1) }),
-            speechSeconds: max(10.0, recordingDuration * 0.6),
+            label: "Host",
+            centroid: VectorMath.l2Normalize((0..<256).map { i in Float(sin(Double(i) * 0.1)) }),
+            speechSeconds: 45.0,
             assignment: "suggested",
             confidence: 0.90
         )
         let c2 = SpeakerCluster(
-            id: "c_\(UUID().uuidString.prefix(6))",
+            id: "c_\(meeting.id)_2",
             meetingId: meeting.id,
             trackId: "track_1",
-            label: "Alex Rivers",
-            centroid: VectorMath.l2Normalize((0..<256).map { _ in Float.random(in: -0.1...0.1) }),
-            speechSeconds: max(5.0, recordingDuration * 0.4),
+            label: "Guest",
+            centroid: VectorMath.l2Normalize((0..<256).map { i in Float(cos(Double(i) * 0.1)) }),
+            speechSeconds: 30.0,
             assignment: "suggested",
             confidence: 0.85
         )
@@ -150,7 +170,7 @@ public final class AppState: ObservableObject {
             clusterId: c1.id,
             speakerName: c1.label,
             start: 0.0,
-            end: max(5.0, recordingDuration * 0.5),
+            end: 5.0,
             text: "Discussed local-first architecture and native macOS implementation for Minutes."
         )
         let u2 = Utterance(
@@ -158,14 +178,14 @@ public final class AppState: ObservableObject {
             meetingId: meeting.id,
             clusterId: c2.id,
             speakerName: c2.label,
-            start: max(5.5, recordingDuration * 0.55),
-            end: max(10.0, recordingDuration),
+            start: 5.5,
+            end: 10.0,
             text: "Agreed to finalize Parachute export and WeSpeaker 256-dim embedding verification."
         )
         try? store.saveUtterances([u1, u2])
         
         let summarizer = Summarizer()
-        let summary = try? await summarizer.summarize(meeting: meeting, utterances: [u1, u2], attendees: store.listPeople())
+        let summary = try? await summarizer.summarize(meeting: meeting, utterances: [u1, u2], attendees: [])
         if let s = summary {
             try? store.saveSummary(s)
         }
@@ -174,7 +194,7 @@ public final class AppState: ObservableObject {
         selectMeeting(id: meeting.id)
         
         isProcessing = false
-        statusMessage = "Meeting processed successfully."
+        statusMessage = "Demo fixture loaded."
     }
     
     public func exportCurrentMeeting(target: String) async -> ExportResult {

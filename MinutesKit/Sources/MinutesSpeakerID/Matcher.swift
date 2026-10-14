@@ -202,7 +202,10 @@ public final class SpeakerMatcher: Sendable {
                 }
                 
                 let isAttendee = attendeePersonIds.contains(p.id)
-                let effectiveScore = isAttendee ? (maxSim + attendeeBonus) : maxSim
+                // Acoustic floor: calendar prior only applies if voice has plausible acoustic similarity (>= 0.40)
+                // and effective score is strictly clamped to [0.0, 1.0]
+                let boosted = (isAttendee && maxSim >= 0.40) ? (maxSim + attendeeBonus) : maxSim
+                let effectiveScore = min(1.0, max(0.0, boosted))
                 
                 allScores.append(CandidateScore(
                     clusterId: c.id,

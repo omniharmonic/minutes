@@ -397,6 +397,102 @@ public final class MinutesStore: @unchecked Sendable {
         return list
     }
     
+    public func getPerson(id: String) -> Person? {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = "SELECT id, display_name, is_me, emails_json, parachute_note_id FROM person WHERE id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                let pId = String(cString: sqlite3_column_text(stmt, 0))
+                let name = String(cString: sqlite3_column_text(stmt, 1))
+                let isMe = sqlite3_column_int(stmt, 2) == 1
+                let emailsStr = String(cString: sqlite3_column_text(stmt, 3))
+                let emails = (try? JSONDecoder().decode([String].self, from: Data(emailsStr.utf8))) ?? []
+                var noteId: String? = nil
+                if sqlite3_column_type(stmt, 4) != SQLITE_NULL {
+                    noteId = String(cString: sqlite3_column_text(stmt, 4))
+                }
+                return Person(id: pId, displayName: name, isMe: isMe, emails: emails, parachuteNoteId: noteId)
+            }
+        }
+        return nil
+    }
+
+    public func saveMeetingAttendees(_ attendees: [MeetingAttendee]) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = """
+        INSERT INTO meeting_attendee (meeting_id, person_id, email, name, is_organizer)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(meeting_id, email) DO UPDATE SET
+            person_id = excluded.person_id,
+            name = excluded.name,
+            is_organizer = excluded.is_organizer;
+        """
+        for a in attendees {
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                defer { sqlite3_finalize(stmt) }
+                sqlite3_bind_text(stmt, 1, (a.meetingId as NSString).utf8String, -1, nil)
+                if let pid = a.personId { sqlite3_bind_text(stmt, 2, (pid as NSString).utf8String, -1, nil) } else { sqlite3_bind_null(stmt, 2) }
+                sqlite3_bind_text(stmt, 3, (a.email as NSString).utf8String, -1, nil)
+                if let name = a.name { sqlite3_bind_text(stmt, 4, (name as NSString).utf8String, -1, nil) } else { sqlite3_bind_null(stmt, 4) }
+                sqlite3_bind_int(stmt, 5, a.isOrganizer ? 1 : 0)
+                _ = sqlite3_step(stmt)
+            }
+        }
+    }
+
+    public func listMeetingAttendees(meetingId: String) -> [MeetingAttendee] {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var list: [MeetingAttendee] = []
+        let sql = "SELECT meeting_id, person_id, email, name, is_organizer FROM meeting_attendee WHERE meeting_id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (meetingId as NSString).utf8String, -1, nil)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let mId = String(cString: sqlite3_column_text(stmt, 0))
+                var pId: String? = nil
+                if sqlite3_column_type(stmt, 1) != SQLITE_NULL { pId = String(cString: sqlite3_column_text(stmt, 1)) }
+                let email = String(cString: sqlite3_column_text(stmt, 2))
+                var name: String? = nil
+                if sqlite3_column_type(stmt, 3) != SQLITE_NULL { name = String(cString: sqlite3_column_text(stmt, 3)) }
+                let isOrg = sqlite3_column_int(stmt, 4) == 1
+                list.append(MeetingAttendee(meetingId: mId, personId: pId, email: email, name: name, isOrganizer: isOrg))
+            }
+        }
+        return list
+    }
+
+    public func listPeopleForMeeting(meetingId: String) -> [Person] {
+        let attendees = listMeetingAttendees(meetingId: meetingId)
+        let clusters = listSpeakerClusters(meetingId: meetingId)
+        
+        var personIds = Set<String>()
+        for a in attendees {
+            if let pid = a.personId { personIds.insert(pid) }
+        }
+        for c in clusters {
+            if let pid = c.personId { personIds.insert(pid) }
+        }
+        
+        var people: [Person] = []
+        for pid in personIds {
+            if let p = getPerson(id: pid) {
+                people.append(p)
+            }
+        }
+        return people
+    }
+    
     public func saveVoiceprint(_ vp: Voiceprint) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -534,6 +630,8 @@ public final class MinutesStore: @unchecked Sendable {
         INSERT INTO speaker_cluster (id, meeting_id, track_id, label, centroid, speech_seconds, person_id, assignment, confidence)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
+            meeting_id = excluded.meeting_id,
+            track_id = excluded.track_id,
             label = excluded.label,
             centroid = excluded.centroid,
             speech_seconds = excluded.speech_seconds,

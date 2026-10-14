@@ -165,47 +165,72 @@ public struct LiveIngestionView: View {
     }
     
     private func importFile() {
+        guard !importPath.isEmpty else {
+            alertMessage = "Please enter an audio file path."
+            showingImportAlert = true
+            return
+        }
+        guard FileManager.default.fileExists(atPath: importPath) else {
+            alertMessage = "File not found at path: \(importPath)"
+            showingImportAlert = true
+            return
+        }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: importPath)
+        guard let fileSize = attrs?[.size] as? UInt64, fileSize > 0 else {
+            alertMessage = "File is empty: \(importPath)"
+            showingImportAlert = true
+            return
+        }
+        
         Task {
             appState.isProcessing = true
-            appState.statusMessage = "Reading and segmenting audio..."
+            appState.statusMessage = "Importing media file..."
             
-            let text = (try? String(contentsOfFile: importPath, encoding: .utf8)) ??
-                "Benjamin Life discussed Riverside alternatives and local-first architecture for StudioLink and Minutes. Alex Rivers agreed that WeSpeaker 256-dim embeddings and Parachute export are key deliverables."
+            let filename = (importPath as NSString).lastPathComponent
+            let isText = filename.hasSuffix(".txt") || filename.hasSuffix(".md")
             
-            let meeting = Meeting(title: meetingTitle, status: "needs_review")
-            try? appState.store.saveMeeting(meeting)
-            
-            let c1 = SpeakerCluster(
-                id: "c_import1",
-                meetingId: meeting.id,
-                trackId: "track_1",
-                label: "Benjamin Life",
-                centroid: (0..<256).map { i in Float(sin(Double(i) * 0.05)) },
-                speechSeconds: 180.0,
-                assignment: "suggested",
-                confidence: 0.92
-            )
-            let c2 = SpeakerCluster(
-                id: "c_import2",
-                meetingId: meeting.id,
-                trackId: "track_1",
-                label: "Alex Rivers",
-                centroid: (0..<256).map { i in Float(cos(Double(i) * 0.05)) },
-                speechSeconds: 95.0,
-                assignment: "suggested",
-                confidence: 0.88
-            )
-            try? appState.store.saveSpeakerClusters([c1, c2])
-            
-            let u1 = Utterance(id: 1, meetingId: meeting.id, clusterId: c1.id, speakerName: "Benjamin Life", start: 0.0, end: 15.0, text: text)
-            try? appState.store.saveUtterances([u1])
-            
-            appState.loadInitialData()
-            appState.selectMeeting(id: meeting.id)
-            appState.selectedSection = .meetings
+            if isText {
+                guard let text = try? String(contentsOfFile: importPath, encoding: .utf8), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    appState.isProcessing = false
+                    alertMessage = "Failed to read text transcript from \(importPath)"
+                    showingImportAlert = true
+                    return
+                }
+                
+                let meeting = Meeting(title: meetingTitle.isEmpty ? filename : meetingTitle, status: "needs_review")
+                try? appState.store.saveMeeting(meeting)
+                
+                let c1 = SpeakerCluster(
+                    id: "c_\(meeting.id)_1",
+                    meetingId: meeting.id,
+                    trackId: "track_1",
+                    label: "Speaker 1",
+                    centroid: [],
+                    speechSeconds: 10.0,
+                    assignment: "suggested",
+                    confidence: 0.0
+                )
+                try? appState.store.saveSpeakerClusters([c1])
+                
+                let u1 = Utterance(id: 1, meetingId: meeting.id, clusterId: c1.id, speakerName: "Speaker 1", start: 0.0, end: 10.0, text: text)
+                try? appState.store.saveUtterances([u1])
+                
+                appState.loadInitialData()
+                appState.selectMeeting(id: meeting.id)
+                appState.selectedSection = .meetings
+            } else {
+                // Audio file import
+                let meeting = Meeting(title: meetingTitle.isEmpty ? filename : meetingTitle, status: "recorded")
+                try? appState.store.saveMeeting(meeting)
+                
+                appState.loadInitialData()
+                appState.selectMeeting(id: meeting.id)
+                appState.selectedSection = .meetings
+            }
             
             appState.isProcessing = false
-            alertMessage = "Successfully imported and processed meeting: \(meeting.title)"
+            appState.statusMessage = "Import completed."
+            alertMessage = "Imported successfully."
             showingImportAlert = true
         }
     }

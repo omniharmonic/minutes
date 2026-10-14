@@ -21,9 +21,17 @@ func printHelp() {
     """)
 }
 
-func getStore() throws -> MinutesStore {
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let dbPath = (home as NSString).appendingPathComponent("Library/Application Support/Minutes/minutes.db")
+func getStore(dataDir: String? = nil) throws -> MinutesStore {
+    let dbPath: String
+    if let dataDir = dataDir {
+        try FileManager.default.createDirectory(atPath: dataDir, withIntermediateDirectories: true)
+        dbPath = (dataDir as NSString).appendingPathComponent("minutes.db")
+    } else {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dir = (home as NSString).appendingPathComponent("Library/Application Support/Minutes")
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        dbPath = (dir as NSString).appendingPathComponent("minutes.db")
+    }
     return try MinutesStore(dbPath: dbPath)
 }
 
@@ -37,17 +45,31 @@ struct MinutesCLI {
         }
         
         let cmd = args[1]
+        var dataDir: String? = nil
+        if let dIdx = args.firstIndex(of: "--data-dir"), dIdx + 1 < args.count {
+            dataDir = args[dIdx + 1]
+        }
         
         do {
-            let store = try getStore()
+            let store = try getStore(dataDir: dataDir)
             
             switch cmd {
             case "import":
                 guard args.count >= 3 else {
-                    print("Usage: minutes-cli import <audio-path> [--title <title>]")
+                    print("Usage: minutes-cli import <audio-path> [--title <title>] [--data-dir <path>]")
                     exit(1)
                 }
                 let audioPath = args[2]
+                guard FileManager.default.fileExists(atPath: audioPath) else {
+                    print("Error: Audio file not found at path: \(audioPath)")
+                    exit(1)
+                }
+                let attrs = try? FileManager.default.attributesOfItem(atPath: audioPath)
+                guard let fileSize = attrs?[.size] as? UInt64, fileSize > 0 else {
+                    print("Error: Audio file is empty at path: \(audioPath)")
+                    exit(1)
+                }
+                
                 var title = (audioPath as NSString).lastPathComponent
                 if let tIdx = args.firstIndex(of: "--title"), tIdx + 1 < args.count {
                     title = args[tIdx + 1]
@@ -59,7 +81,7 @@ struct MinutesCLI {
                 
             case "process":
                 guard args.count >= 3 else {
-                    print("Usage: minutes-cli process <meeting-id> [--transcript <path>]")
+                    print("Usage: minutes-cli process <meeting-id> [--transcript <path>] [--data-dir <path>]")
                     exit(1)
                 }
                 let meetingId = args[2]
@@ -70,17 +92,26 @@ struct MinutesCLI {
                 
                 print("Processing meeting \(meetingId)...")
                 
-                // Read transcript text if provided, or check default
+                // Read transcript text if provided
                 var text = ""
                 if let tIdx = args.firstIndex(of: "--transcript"), tIdx + 1 < args.count {
-                    text = (try? String(contentsOfFile: args[tIdx + 1], encoding: .utf8)) ?? ""
+                    let transcriptPath = args[tIdx + 1]
+                    guard FileManager.default.fileExists(atPath: transcriptPath) else {
+                        print("Error: Transcript file not found at \(transcriptPath)")
+                        exit(1)
+                    }
+                    guard let fileText = try? String(contentsOfFile: transcriptPath, encoding: .utf8),
+                          !fileText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        print("Error: Transcript file is empty at \(transcriptPath)")
+                        exit(1)
+                    }
+                    text = fileText
                 } else {
-                    // Check if a handy text exists locally
-                    let defaultTxt = "/Users/benjaminlife/dev/no_Saas/handy-1791911766.txt"
-                    text = (try? String(contentsOfFile: defaultTxt, encoding: .utf8)) ?? "Team discussed system architecture and real-time streaming alternatives."
+                    print("Error: No transcript provided. Pass --transcript <path> to process meeting text.")
+                    exit(1)
                 }
                 
-                // Split text into words with simulated timestamps
+                // Split text into words
                 let rawWords = text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
                 var asrWords: [ASRWord] = []
                 var currentTime = 0.5
@@ -92,25 +123,24 @@ struct MinutesCLI {
                 
                 let totalDuration = currentTime
                 
-                // Create speaker clusters and diarization segments
-                // E.g. Speaker 1 (The Host / User) and Speaker 2
+                // Create speaker clusters scoped to this meeting
                 let cluster1 = SpeakerCluster(
-                    id: "c_spk1",
+                    id: "c_\(meetingId)_1",
                     meetingId: meetingId,
                     trackId: "track_1",
                     label: "Speaker 1",
-                    centroid: (0..<256).map { _ in Float.random(in: -0.1...0.1) },
+                    centroid: (0..<256).map { i in Float(sin(Double(i) * 0.1)) },
                     speechSeconds: totalDuration * 0.7,
                     assignment: "suggested",
                     confidence: 0.85
                 )
                 
                 let cluster2 = SpeakerCluster(
-                    id: "c_spk2",
+                    id: "c_\(meetingId)_2",
                     meetingId: meetingId,
                     trackId: "track_1",
                     label: "Speaker 2",
-                    centroid: (0..<256).map { _ in Float.random(in: -0.1...0.1) },
+                    centroid: (0..<256).map { i in Float(cos(Double(i) * 0.1)) },
                     speechSeconds: totalDuration * 0.3,
                     assignment: "suggested",
                     confidence: 0.70
@@ -118,12 +148,12 @@ struct MinutesCLI {
                 
                 try store.saveSpeakerClusters([cluster1, cluster2])
                 
-                // Diarization segments alternating
+                // Diarization segments alternating between cluster1 and cluster2
                 var segments: [TimedSpeakerSegment] = []
                 var segStart = 0.0
                 while segStart < totalDuration {
                     let segEnd = min(totalDuration, segStart + 25.0)
-                    let spkId = (Int(segStart / 25.0) % 2 == 0) ? "c_spk1" : "c_spk2"
+                    let spkId = (Int(segStart / 25.0) % 2 == 0) ? cluster1.id : cluster2.id
                     segments.append(TimedSpeakerSegment(speakerId: spkId, start: segStart, end: segEnd))
                     segStart = segEnd
                 }
@@ -241,7 +271,7 @@ struct MinutesCLI {
                     exit(1)
                 }
                 let utterances = store.listUtterances(meetingId: meetingId)
-                let people = store.listPeople()
+                let people = store.listPeopleForMeeting(meetingId: meetingId)
                 
                 let summarizer = Summarizer()
                 let summary = try await summarizer.summarize(meeting: meeting, utterances: utterances, attendees: people)
@@ -266,7 +296,7 @@ struct MinutesCLI {
                     print("Meeting \(meetingId) not found.")
                     exit(1)
                 }
-                let attendees = store.listPeople()
+                let attendees = store.listPeopleForMeeting(meetingId: meetingId)
                 let clusters = store.listSpeakerClusters(meetingId: meetingId)
                 let utterances = store.listUtterances(meetingId: meetingId)
                 let summary = store.getSummary(meetingId: meetingId)

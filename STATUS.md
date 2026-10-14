@@ -1,38 +1,44 @@
-# Minutes: Status
+# Minutes: Status & Milestone Roadmap
 
-Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
+Status Definitions:
+- `[x] G0-VERIFIED`: Remediated, verified with adversarial tests, and isolated from production/personal storage.
+- `[~] IN PROGRESS`: Active implementation gate.
+- `[ ] PLANNED`: Contract defined; implementation / device validation pending.
+- `[!] BLOCKED`: External dependency or hardware blocker.
 
-## Phase 0: Spikes
-- [x] MN-0.1 FluidAudio / on-device speech pipeline integration
-- [x] MN-0.2 macOS capture architecture (process tap + mic dual capture)
-- [x] MN-0.3 Speaker-ID cosine similarity calibration
-- [x] MN-0.4 Mic bleed handling
-- [x] MN-0.5 Summary provider evaluation
-- [x] **Gate:** ARCHITECTURE/DECISIONS updated
+---
 
-## Phase 1: Headless pipeline (`MinutesKit` + `minutes-cli`)
-- [x] MN-1.1 MinutesKit package (Swift 6 strict concurrency, macOS 15, iOS 18)
-- [x] MN-1.2 Models + SQLite store (migrations, CRUD, blob vectors)
-- [x] MN-1.3 Speech services (ASR word timestamps, diarization segment types)
-- [x] MN-1.4 TranscriptMerger (time overlap assignment + utterance grouping)
-- [x] MN-1.5 Pipeline orchestrator
-- [x] MN-1.6 minutes-cli executable (`import`, `process`, `assign`, `summarize`, `export`, `show`, `people`)
-- [x] MN-1.7 Speaker ID (Hungarian 1-to-1 matcher + attendee prior bonus + voiceprint enrollment)
-- [x] MN-1.8 Calendar (NameResolver heuristic splitting + ConferenceLinkParser)
-- [x] **M1** CLI auto-identifies speakers in a second file
+## Milestone Gates (Audit 2026-10-14 Framework)
 
-## Phase 2: Mac capture + shell
-- [x] MN-2.1 XcodeGen / Swift Package architecture
-- [x] MN-2.2 Chunked audio format
-- [x] MN-2.3 Dual track separation (mic vs system)
+### Gate G0: Truth, Safety & Test Isolation
+- [x] **G0.1 Fabricated Extractive Fallback Removed**: Deleted fabricated decision and action-item strings in `Summarizer.swift`. Fallback is now strictly factual.
+- [x] **G0.2 Acoustic Similarity Floor & Clamping**: `Matcher.swift` enforces minimum acoustic similarity floor (`maxSim >= 0.40`) before calendar bonus and clamps `effectiveScore` to `[0.0, 1.0]`.
+- [x] **G0.3 SQLite Meeting Isolation**: `Store.swift` upsert preserves meeting/track boundaries (`ON CONFLICT DO UPDATE SET meeting_id, track_id`).
+- [x] **G0.4 Scoped Attendees**: `Store.swift` and `AppState.swift` scope attendees per meeting via `listPeopleForMeeting(meetingId:)` rather than returning all database records.
+- [x] **G0.5 Fake UTTERANCES & Synthetic Vectors Removed**: `stopAndProcessMeeting()` no longer injects random 256-dim vectors or canned text. Demo preview is isolated to `loadDemoMeetingFixture()`.
+- [x] **G0.6 Audio Validation in CLI and App**: `minutes-cli` and `LiveIngestionView.swift` validate non-empty audio files and report errors instead of attempting UTF-8 string decoding fallback.
+- [x] **G0.7 Isolated Test Storage**: `MinutesClient` and `conftest.py` use disposable temporary database directories (`--data-dir`), never touching personal `~/Library/Application Support/Minutes`.
+- **Exit Evidence**: All 32 Swift unit tests pass cleanly; invalid audio inputs fail truthfully; root test suite isolated. **STATUS: G0 COMPLETE.**
 
-## Phase 3: Review + people
-- [x] MN-3.3 Lock + enrol voiceprints on confirmation
-- [x] MN-3.4 People view & voiceprint tracking
+---
 
-## Phase 4: Summaries + exports
-- [x] MN-4.1 Summarize core (structured JSON + GitHub Markdown)
-- [x] MN-4.2 Local heuristic provider + LLM provider protocol
-- [x] MN-4.4 Export protocol + MarkdownAdapter (Obsidian YAML front-matter)
-- [x] MN-4.5 ParachuteAdapter (live localhost:1940 vault integration, creates person & meeting notes, links with `attended-by`)
-- [x] **M2 / Mac MVP COMPLETE** Real recording → diarize → assign speaker → voiceprint enroll → summarize → export to live Parachute vault
+### Gate M1: Real Speech, Diarization & Pipeline Feasibility
+- [~] **M1.1 Speech Pipeline Integration**: Wire native CoreML / FluidAudio ASR with genuine audio files (`.wav` / `.m4a`).
+- [ ] **M1.2 Diarization Calibration**: Derive speaker segments from real multi-speaker audio with honest DER/WER reporting.
+- [ ] **M1.3 Resumable Processing**: State machine transitions (`importing` → `transcribing` → `diarizing` → `review` → `exported`).
+- [ ] **M1.4 CLI End-to-End Pipeline**: `minutes-cli process` executing genuine local model inference without text injection.
+
+---
+
+### Gate M2: Trustworthy Capture & Confirmed Learning
+- [ ] **MN-2.1 macOS Process Tap & Mic Separation**: Dual-channel recording without mic bleed.
+- [ ] **MN-2.2 Calendar Context Integration**: Optional EventKit / Google Calendar attendee hints as contextual priors only.
+- [ ] **MN-2.3 Confirmed Speaker Enrollment**: User opt-in to save confirmed centroids into persistent voiceprint library.
+- [ ] **MN-2.4 Grounded Summarization**: LLM / extractive summarization strictly with source timestamps and citations.
+
+---
+
+### Gate I1 & M3: Mobile & Cloud Integration
+- [ ] **I1.1 Restricted Prism Ingestion**: Dedicated client credentials, scoped token permissions, outbox retry.
+- [ ] **M3.1 iOS Native Target**: Background mic recording, locked-screen support, physical iPhone TestFlight build.
+

@@ -52,13 +52,6 @@ public final class Summarizer: Sendable {
             }
         }
         
-        if decisions.isEmpty {
-            decisions.append("Aligned on next milestones and architectural implementation plan.")
-        }
-        if actionItems.isEmpty {
-            actionItems.append(ActionItem(text: "Review meeting minutes and finalize deliverables", owner: attendees.first?.displayName ?? "Team"))
-        }
-        
         // Chunk topics
         if !utterances.isEmpty {
             let mid = utterances.count / 2
