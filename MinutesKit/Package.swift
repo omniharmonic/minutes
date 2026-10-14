@@ -83,7 +83,7 @@ let package = Package(
         // Test targets
         .testTarget(
             name: "MinutesCoreTests",
-            dependencies: ["MinutesCore"]
+            dependencies: ["MinutesCore", "MinutesSummarize"]
         ),
         .testTarget(
             name: "MinutesSpeechTests",

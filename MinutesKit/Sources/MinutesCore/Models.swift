@@ -260,3 +260,83 @@ public struct Bookmark: Codable, Sendable, Identifiable {
     }
 }
 
+public enum OutboxStatus: String, Codable, Sendable {
+    case pending = "pending"
+    case sending = "sending"
+    case awaitingReceipt = "awaiting_receipt"
+    case synced = "synced"
+    case failedRetryable = "failed_retryable"
+    case conflict = "conflict"
+    case needsSignIn = "needs_sign_in"
+    case forbidden = "forbidden"
+    case revoked = "revoked"
+}
+
+public struct PrismReceipt: Codable, Sendable {
+    public let importId: String
+    public let meetingNoteId: String
+    public let transcriptNoteId: String
+    public let serverRevision: Int
+    public let contentHash: String
+    public let committedAt: Date
+    
+    public init(
+        importId: String,
+        meetingNoteId: String,
+        transcriptNoteId: String,
+        serverRevision: Int,
+        contentHash: String,
+        committedAt: Date = Date()
+    ) {
+        self.importId = importId
+        self.meetingNoteId = meetingNoteId
+        self.transcriptNoteId = transcriptNoteId
+        self.serverRevision = serverRevision
+        self.contentHash = contentHash
+        self.committedAt = committedAt
+    }
+}
+
+public struct OutboxItem: Codable, Sendable, Identifiable {
+    public let id: String
+    public let meetingId: String
+    public let destinationVault: String
+    public let sourceRevision: Int
+    public let idempotencyKey: String
+    public var status: OutboxStatus
+    public var retryCount: Int
+    public let createdAt: Date
+    public var lastAttemptAt: Date?
+    public var receipt: PrismReceipt?
+    public var errorMessage: String?
+    public let payloadJson: String
+    
+    public init(
+        id: String = UUID().uuidString.prefix(8).lowercased(),
+        meetingId: String,
+        destinationVault: String,
+        sourceRevision: Int = 1,
+        idempotencyKey: String,
+        status: OutboxStatus = .pending,
+        retryCount: Int = 0,
+        createdAt: Date = Date(),
+        lastAttemptAt: Date? = nil,
+        receipt: PrismReceipt? = nil,
+        errorMessage: String? = nil,
+        payloadJson: String
+    ) {
+        self.id = id
+        self.meetingId = meetingId
+        self.destinationVault = destinationVault
+        self.sourceRevision = sourceRevision
+        self.idempotencyKey = idempotencyKey
+        self.status = status
+        self.retryCount = retryCount
+        self.createdAt = createdAt
+        self.lastAttemptAt = lastAttemptAt
+        self.receipt = receipt
+        self.errorMessage = errorMessage
+        self.payloadJson = payloadJson
+    }
+}
+

@@ -138,6 +138,21 @@ public final class MinutesStore: @unchecked Sendable {
             created_at REAL NOT NULL,
             FOREIGN KEY(meeting_id) REFERENCES meeting(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS outbox_item (
+            id TEXT PRIMARY KEY,
+            meeting_id TEXT NOT NULL,
+            destination_vault TEXT NOT NULL,
+            source_revision INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            last_attempt_at REAL,
+            receipt_json TEXT,
+            error_message TEXT,
+            payload_json TEXT NOT NULL,
+            FOREIGN KEY(meeting_id) REFERENCES meeting(id) ON DELETE CASCADE
+        );
         """
         
         lock.lock()
@@ -936,6 +951,193 @@ public final class MinutesStore: @unchecked Sendable {
             let msg = String(cString: sqlite3_errmsg(db))
             throw NSError(domain: "MinutesStore", code: 10, userInfo: [NSLocalizedDescriptionKey: "Step deleteBookmark: \(msg)"])
         }
+    }
+    
+    // MARK: - Outbox
+    
+    public func saveOutboxItem(_ item: OutboxItem) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = """
+        INSERT INTO outbox_item (
+            id, meeting_id, destination_vault, source_revision,
+            idempotency_key, status, retry_count, created_at,
+            last_attempt_at, receipt_json, error_message, payload_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            status = excluded.status,
+            retry_count = excluded.retry_count,
+            last_attempt_at = excluded.last_attempt_at,
+            receipt_json = excluded.receipt_json,
+            error_message = excluded.error_message;
+        """
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) != SQLITE_OK {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 11, userInfo: [NSLocalizedDescriptionKey: "Prepare saveOutboxItem: \(msg)"])
+        }
+        defer { sqlite3_finalize(stmt) }
+        
+        var receiptStr: String? = nil
+        if let r = item.receipt, let data = try? JSONEncoder().encode(r) {
+            receiptStr = String(data: data, encoding: .utf8)
+        }
+        
+        sqlite3_bind_text(stmt, 1, (item.id as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, (item.meetingId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, (item.destinationVault as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_int(stmt, 4, Int32(item.sourceRevision))
+        sqlite3_bind_text(stmt, 5, (item.idempotencyKey as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 6, (item.status.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_int(stmt, 7, Int32(item.retryCount))
+        sqlite3_bind_double(stmt, 8, item.createdAt.timeIntervalSince1970)
+        
+        if let last = item.lastAttemptAt {
+            sqlite3_bind_double(stmt, 9, last.timeIntervalSince1970)
+        } else {
+            sqlite3_bind_null(stmt, 9)
+        }
+        
+        if let rStr = receiptStr {
+            sqlite3_bind_text(stmt, 10, (rStr as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, 10)
+        }
+        
+        if let err = item.errorMessage {
+            sqlite3_bind_text(stmt, 11, (err as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, 11)
+        }
+        
+        sqlite3_bind_text(stmt, 12, (item.payloadJson as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 11, userInfo: [NSLocalizedDescriptionKey: "Step saveOutboxItem: \(msg)"])
+        }
+    }
+    
+    public func getOutboxItem(id: String) -> OutboxItem? {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = """
+        SELECT id, meeting_id, destination_vault, source_revision,
+               idempotency_key, status, retry_count, created_at,
+               last_attempt_at, receipt_json, error_message, payload_json
+        FROM outbox_item WHERE id = ?
+        """
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return parseOutboxItem(stmt: stmt!)
+            }
+        }
+        return nil
+    }
+    
+    public func listOutboxItems(meetingId: String? = nil, status: OutboxStatus? = nil) -> [OutboxItem] {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var list: [OutboxItem] = []
+        var sql = """
+        SELECT id, meeting_id, destination_vault, source_revision,
+               idempotency_key, status, retry_count, created_at,
+               last_attempt_at, receipt_json, error_message, payload_json
+        FROM outbox_item WHERE 1=1
+        """
+        if meetingId != nil { sql += " AND meeting_id = ?" }
+        if status != nil { sql += " AND status = ?" }
+        sql += " ORDER BY created_at ASC"
+        
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            var bindIdx: Int32 = 1
+            if let mId = meetingId {
+                sqlite3_bind_text(stmt, bindIdx, (mId as NSString).utf8String, -1, nil)
+                bindIdx += 1
+            }
+            if let st = status {
+                sqlite3_bind_text(stmt, bindIdx, (st.rawValue as NSString).utf8String, -1, nil)
+                bindIdx += 1
+            }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                list.append(parseOutboxItem(stmt: stmt!))
+            }
+        }
+        return list
+    }
+    
+    public func deleteOutboxItem(id: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = "DELETE FROM outbox_item WHERE id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) != SQLITE_OK {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 12, userInfo: [NSLocalizedDescriptionKey: "Prepare deleteOutboxItem: \(msg)"])
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 12, userInfo: [NSLocalizedDescriptionKey: "Step deleteOutboxItem: \(msg)"])
+        }
+    }
+    
+    private func parseOutboxItem(stmt: OpaquePointer) -> OutboxItem {
+        let id = String(cString: sqlite3_column_text(stmt, 0))
+        let mId = String(cString: sqlite3_column_text(stmt, 1))
+        let vault = String(cString: sqlite3_column_text(stmt, 2))
+        let rev = Int(sqlite3_column_int(stmt, 3))
+        let idemKey = String(cString: sqlite3_column_text(stmt, 4))
+        let statusRaw = String(cString: sqlite3_column_text(stmt, 5))
+        let status = OutboxStatus(rawValue: statusRaw) ?? .pending
+        let retries = Int(sqlite3_column_int(stmt, 6))
+        let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
+        
+        var lastAttempt: Date? = nil
+        if sqlite3_column_type(stmt, 8) != SQLITE_NULL {
+            lastAttempt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 8))
+        }
+        
+        var receipt: PrismReceipt? = nil
+        if sqlite3_column_type(stmt, 9) != SQLITE_NULL, let text = sqlite3_column_text(stmt, 9) {
+            let str = String(cString: text)
+            if let data = str.data(using: .utf8) {
+                receipt = try? JSONDecoder().decode(PrismReceipt.self, from: data)
+            }
+        }
+        
+        var errMsg: String? = nil
+        if sqlite3_column_type(stmt, 10) != SQLITE_NULL, let text = sqlite3_column_text(stmt, 10) {
+            errMsg = String(cString: text)
+        }
+        
+        let payload = String(cString: sqlite3_column_text(stmt, 11))
+        
+        return OutboxItem(
+            id: id,
+            meetingId: mId,
+            destinationVault: vault,
+            sourceRevision: rev,
+            idempotencyKey: idemKey,
+            status: status,
+            retryCount: retries,
+            createdAt: createdAt,
+            lastAttemptAt: lastAttempt,
+            receipt: receipt,
+            errorMessage: errMsg,
+            payloadJson: payload
+        )
     }
 }
 
