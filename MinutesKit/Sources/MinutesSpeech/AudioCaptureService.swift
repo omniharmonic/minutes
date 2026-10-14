@@ -9,6 +9,11 @@ public final class AudioCaptureService: @unchecked Sendable {
     private var isCapturing = false
     private let lock = NSLock()
     
+    #if os(iOS)
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+    #endif
+    
     public private(set) var currentLevel: Float = 0.0
     public private(set) var recordedDuration: Double = 0.0
     private var sampleCount: Int64 = 0
@@ -23,6 +28,34 @@ public final class AudioCaptureService: @unchecked Sendable {
         if isCapturing {
             return
         }
+        
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth, .defaultToSpeaker])
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notif in
+            guard let self = self,
+                  let userInfo = notif.userInfo,
+                  let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+            
+            if type == .began {
+                self.engine.pause()
+            } else if type == .ended {
+                if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                    let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                    if options.contains(.shouldResume) {
+                        try? self.engine.start()
+                    }
+                }
+            }
+        }
+        #endif
         
         let inputNode = engine.inputNode
         let hwFormat = inputNode.inputFormat(forBus: 0)
@@ -130,6 +163,15 @@ public final class AudioCaptureService: @unchecked Sendable {
         
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        
+        #if os(iOS)
+        if let obs = interruptionObserver {
+            NotificationCenter.default.removeObserver(obs)
+            interruptionObserver = nil
+        }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
         
         let url = audioFile?.url
         audioFile = nil

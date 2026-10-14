@@ -69,11 +69,13 @@ public final class AudioPlaybackService: NSObject, ObservableObject, AVAudioPlay
     private func startTimeObserver() {
         stopTimeObserver()
         timeObserver = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            guard let self = self, let p = self.player else { return }
-            self.currentTime = p.currentTime
-            if let stop = self.stopTime, p.currentTime >= stop {
-                self.pause()
-                self.stopTime = nil
+            Task { @MainActor [weak self] in
+                guard let self = self, let p = self.player else { return }
+                self.currentTime = p.currentTime
+                if let stop = self.stopTime, p.currentTime >= stop {
+                    self.pause()
+                    self.stopTime = nil
+                }
             }
         }
     }
