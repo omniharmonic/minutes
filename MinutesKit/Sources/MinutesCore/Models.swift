@@ -237,3 +237,26 @@ public struct Voiceprint: Codable, Sendable, Identifiable {
         self.createdAt = createdAt
     }
 }
+
+public struct Bookmark: Codable, Sendable, Identifiable {
+    public let id: String
+    public let meetingId: String
+    public let timestamp: Double
+    public var label: String
+    public let createdAt: Date
+    
+    public init(
+        id: String = UUID().uuidString.prefix(8).lowercased(),
+        meetingId: String,
+        timestamp: Double,
+        label: String = "Bookmark",
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.meetingId = meetingId
+        self.timestamp = timestamp
+        self.label = label
+        self.createdAt = createdAt
+    }
+}
+

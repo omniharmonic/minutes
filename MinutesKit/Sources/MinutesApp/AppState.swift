@@ -42,6 +42,7 @@ public final class AppState: ObservableObject {
     @Published public var currentUtterances: [Utterance] = []
     @Published public var currentAttendees: [Person] = []
     @Published public var currentSummary: MeetingSummary? = nil
+    @Published public var currentBookmarks: [Bookmark] = []
     @Published public var voiceprints: [Voiceprint] = []
     
     // Recording & Ingestion State
@@ -58,6 +59,8 @@ public final class AppState: ObservableObject {
     public let store: MinutesStore
     public let permissionManager = PermissionManager.shared
     private var recordingTimer: AnyCancellable?
+    private var activeRecordingURL: URL?
+    private var recordingMeetingId: String?
     
     public init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -78,12 +81,8 @@ public final class AppState: ObservableObject {
     public func loadInitialData() {
         self.meetings = store.listMeetings()
         self.voiceprints = store.listVoiceprints()
-        
-        // If empty, create a sample meeting for immediate out-of-the-box exploration
-        if meetings.isEmpty {
-            createSampleMeeting()
-        } else {
-            selectMeeting(id: meetings.first?.id)
+        if let first = meetings.first {
+            selectMeeting(id: first.id)
         }
     }
     
@@ -94,20 +93,35 @@ public final class AppState: ObservableObject {
         self.currentClusters = store.listSpeakerClusters(meetingId: id)
         self.currentUtterances = store.listUtterances(meetingId: id)
         self.currentSummary = store.getSummary(meetingId: id)
+        self.currentBookmarks = store.listBookmarks(meetingId: id)
         self.currentAttendees = store.listPeopleForMeeting(meetingId: id)
         self.voiceprints = store.listVoiceprints()
     }
     
     public func startQuickMeeting() {
+        let mId = String(UUID().uuidString.prefix(8).lowercased())
+        let audioDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Minutes/audio", isDirectory: true) ?? URL(fileURLWithPath: "/tmp/minutes/audio")
+        try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        let targetAudioURL = audioDir.appendingPathComponent("meeting_\(mId).wav")
+        self.activeRecordingURL = targetAudioURL
+        self.recordingMeetingId = mId
+        
+        let meetingTitle = "Meeting (\(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)))"
+        let meeting = Meeting(id: mId, title: meetingTitle, status: "recording", audioPath: targetAudioURL.path)
+        try? store.saveMeeting(meeting)
+        
         isRecording = true
         recordingDuration = 0.0
-        statusMessage = "Recording meeting audio..."
+        statusMessage = "Recording microphone audio to \(targetAudioURL.lastPathComponent)..."
         
-        recordingTimer = Timer.publish(every: 1.0, on: .main, in: .common)
+        try? AudioCaptureService.shared.startRecording(to: targetAudioURL)
+        
+        recordingTimer = Timer.publish(every: 0.5, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 guard let self = self else { return }
-                self.recordingDuration += 1.0
+                self.recordingDuration = AudioCaptureService.shared.recordedDuration
             }
     }
     
@@ -115,23 +129,43 @@ public final class AppState: ObservableObject {
         isRecording = false
         recordingTimer?.cancel()
         
-        guard recordingDuration >= 1.0 else {
-            statusMessage = "Recording cancelled: under 1 second."
+        let recordedURL = try? AudioCaptureService.shared.stopRecording()
+        let audioURL = recordedURL ?? activeRecordingURL
+        guard let mId = recordingMeetingId else {
+            statusMessage = "Recording stopped. No active meeting ID."
             return
         }
         
         isProcessing = true
-        statusMessage = "Finalizing recorded audio..."
+        statusMessage = "Processing recorded speech with FluidAudio..."
         
-        let meetingTitle = "Meeting (\(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)))"
-        let meeting = Meeting(title: meetingTitle, status: "recorded")
-        try? store.saveMeeting(meeting)
+        var current = store.getMeeting(id: mId) ?? Meeting(id: mId, title: "Meeting", status: "recorded", audioPath: audioURL?.path)
+        current.status = "processing"
+        try? store.saveMeeting(current)
+        
+        if let audio = audioURL, FileManager.default.fileExists(atPath: audio.path) {
+            let orchestrator = PipelineOrchestrator()
+            do {
+                let result = try await orchestrator.process(meetingId: mId, audioURL: audio, config: diarizationConfig)
+                try store.saveSpeakerClusters(result.clusters)
+                try store.saveUtterances(result.utterances)
+                current.status = "needs_review"
+                try store.saveMeeting(current)
+                statusMessage = "Processing complete: \(result.clusters.count) speaker clusters, \(result.utterances.count) utterances."
+            } catch {
+                current.status = "recorded"
+                try? store.saveMeeting(current)
+                statusMessage = "Pipeline error: \(error.localizedDescription)"
+            }
+        } else {
+            current.status = "recorded"
+            try? store.saveMeeting(current)
+            statusMessage = "Meeting recorded without audio file."
+        }
         
         loadInitialData()
-        selectMeeting(id: meeting.id)
-        
+        selectMeeting(id: mId)
         isProcessing = false
-        statusMessage = "Meeting recorded. Awaiting speech processing."
     }
     
     public func loadDemoMeetingFixture() async {

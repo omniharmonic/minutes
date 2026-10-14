@@ -130,6 +130,14 @@ public final class MinutesStore: @unchecked Sendable {
             markdown TEXT NOT NULL,
             FOREIGN KEY(meeting_id) REFERENCES meeting(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS bookmark (
+            id TEXT PRIMARY KEY,
+            meeting_id TEXT NOT NULL,
+            timestamp REAL NOT NULL,
+            label TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            FOREIGN KEY(meeting_id) REFERENCES meeting(id) ON DELETE CASCADE
+        );
         """
         
         lock.lock()
@@ -856,6 +864,78 @@ public final class MinutesStore: @unchecked Sendable {
             }
         }
         return nil
+    }
+    
+    // MARK: - Bookmarks
+    
+    public func saveBookmark(_ b: Bookmark) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = """
+        INSERT INTO bookmark (id, meeting_id, timestamp, label, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            label = excluded.label,
+            timestamp = excluded.timestamp;
+        """
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) != SQLITE_OK {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 9, userInfo: [NSLocalizedDescriptionKey: "Prepare saveBookmark: \(msg)"])
+        }
+        defer { sqlite3_finalize(stmt) }
+        
+        sqlite3_bind_text(stmt, 1, (b.id as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, (b.meetingId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_double(stmt, 3, b.timestamp)
+        sqlite3_bind_text(stmt, 4, (b.label as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_double(stmt, 5, b.createdAt.timeIntervalSince1970)
+        
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 9, userInfo: [NSLocalizedDescriptionKey: "Step saveBookmark: \(msg)"])
+        }
+    }
+    
+    public func listBookmarks(meetingId: String) -> [Bookmark] {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var list: [Bookmark] = []
+        let sql = "SELECT id, meeting_id, timestamp, label, created_at FROM bookmark WHERE meeting_id = ? ORDER BY timestamp ASC"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (meetingId as NSString).utf8String, -1, nil)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = String(cString: sqlite3_column_text(stmt, 0))
+                let mId = String(cString: sqlite3_column_text(stmt, 1))
+                let ts = sqlite3_column_double(stmt, 2)
+                let label = String(cString: sqlite3_column_text(stmt, 3))
+                let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+                list.append(Bookmark(id: id, meetingId: mId, timestamp: ts, label: label, createdAt: createdAt))
+            }
+        }
+        return list
+    }
+    
+    public func deleteBookmark(id: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let sql = "DELETE FROM bookmark WHERE id = ?"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) != SQLITE_OK {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 10, userInfo: [NSLocalizedDescriptionKey: "Prepare deleteBookmark: \(msg)"])
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw NSError(domain: "MinutesStore", code: 10, userInfo: [NSLocalizedDescriptionKey: "Step deleteBookmark: \(msg)"])
+        }
     }
 }
 

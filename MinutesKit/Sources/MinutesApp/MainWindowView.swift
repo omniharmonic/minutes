@@ -8,12 +8,12 @@ import MinutesExport
 @available(macOS 15.0, iOS 18.0, *)
 public struct MainWindowView: View {
     @ObservedObject public var appState: AppState
-    @State private var meetingTab: MeetingTab = .speakers
+    @State private var meetingTab: MeetingTab = .notes
     
     public enum MeetingTab: String, CaseIterable, Identifiable {
-        case speakers = "Speaker Review"
+        case notes = "Notes"
         case transcript = "Transcript"
-        case summary = "AI Summary"
+        case speakers = "Speakers"
         
         public var id: String { rawValue }
     }
@@ -213,13 +213,41 @@ public struct MainWindowView: View {
                             Spacer()
                             
                             // Segmented Tabs
-                            Picker("", selection: $meetingTab) {
+                            HStack(spacing: 8) {
                                 ForEach(MeetingTab.allCases) { tab in
-                                    Text(tab.rawValue).tag(tab)
+                                    Button(action: { meetingTab = tab }) {
+                                        HStack(spacing: 6) {
+                                            Text(tab.rawValue)
+                                                .font(.subheadline.weight(meetingTab == tab ? .semibold : .medium))
+                                            if tab == .speakers {
+                                                let unconfirmed = appState.currentClusters.filter { $0.assignment != "user" }.count
+                                                if unconfirmed > 0 {
+                                                    Text("\(unconfirmed)")
+                                                        .font(.system(size: 10, weight: .bold))
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 2)
+                                                        .background(Color.orange.opacity(0.2))
+                                                        .foregroundStyle(Color.orange)
+                                                        .clipShape(Capsule())
+                                                }
+                                            }
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(meetingTab == tab ? MinutesTheme.cardHover : Color.clear)
+                                        .foregroundStyle(meetingTab == tab ? MinutesTheme.text : MinutesTheme.muted)
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
-                            .pickerStyle(.segmented)
-                            .frame(width: 320)
+                            .padding(3)
+                            .background(MinutesTheme.bg)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(MinutesTheme.border, lineWidth: 1)
+                            )
                         }
                     }
                     .padding(14)
@@ -233,33 +261,54 @@ public struct MainWindowView: View {
                     
                     // Tab Content
                     switch meetingTab {
-                    case .speakers:
-                        ReviewSpeakersView(
+                    case .notes:
+                        NotesView(
                             meeting: meeting,
-                            clusters: appState.currentClusters,
+                            summary: appState.currentSummary,
+                            utterances: appState.currentUtterances,
                             attendees: appState.currentAttendees,
-                            voiceprints: appState.voiceprints,
-                            diarizationConfig: appState.diarizationConfig,
-                            onAssign: { clusterId, person in
-                                if let idx = appState.currentClusters.firstIndex(where: { $0.id == clusterId }) {
-                                    appState.currentClusters[idx].label = person.displayName
-                                    appState.currentClusters[idx].personId = person.id
-                                    appState.currentClusters[idx].assignment = "user"
-                                    try? appState.store.saveSpeakerClusters(appState.currentClusters)
+                            bookmarks: appState.currentBookmarks,
+                            onSaveNotes: { newNotes in
+                                var updated = meeting
+                                updated.userNotes = newNotes
+                                try? appState.store.saveMeeting(updated)
+                                appState.currentMeeting = updated
+                                if let idx = appState.meetings.firstIndex(where: { $0.id == updated.id }) {
+                                    appState.meetings[idx] = updated
                                 }
                             },
-                            onLockAndEnroll: { updatedClusters in
-                                for c in updatedClusters where !c.centroid.isEmpty {
-                                    if let pId = c.personId {
-                                        let vp = Voiceprint(personId: pId, vector: c.centroid, speechSeconds: c.speechSeconds)
-                                        try? appState.store.saveVoiceprint(vp)
+                            onSaveBookmark: { bookmark in
+                                try? appState.store.saveBookmark(bookmark)
+                                appState.currentBookmarks = appState.store.listBookmarks(meetingId: meeting.id)
+                            },
+                            onDeleteBookmark: { bookmarkId in
+                                try? appState.store.deleteBookmark(id: bookmarkId)
+                                appState.currentBookmarks = appState.store.listBookmarks(meetingId: meeting.id)
+                            },
+                            onGenerateSummary: {
+                                Task {
+                                    let s = Summarizer()
+                                    if let sum = try? await s.summarize(
+                                        meeting: meeting,
+                                        utterances: appState.currentUtterances,
+                                        attendees: appState.currentAttendees
+                                    ) {
+                                        try? appState.store.saveSummary(sum)
+                                        await MainActor.run {
+                                            appState.currentSummary = sum
+                                        }
                                     }
                                 }
-                                try? appState.store.saveSpeakerClusters(updatedClusters)
-                                appState.voiceprints = appState.store.listVoiceprints()
                             },
-                            onApplyDiarizationConfig: { newConfig in
-                                appState.diarizationConfig = newConfig
+                            onExportMarkdown: {
+                                Task {
+                                    _ = await appState.exportCurrentMeeting(target: "markdown")
+                                }
+                            },
+                            onExportParachute: {
+                                Task {
+                                    _ = await appState.exportCurrentMeeting(target: "parachute")
+                                }
                             }
                         )
                     case .transcript:
@@ -286,45 +335,40 @@ public struct MainWindowView: View {
                                 }
                             }
                         )
-                    case .summary:
-                        if let summary = appState.currentSummary {
-                            SummaryView(
-                                summary: summary,
-                                onExportParachute: {
-                                    Task {
-                                        _ = await appState.exportCurrentMeeting(target: "parachute")
-                                    }
-                                },
-                                onExportMarkdown: {
-                                    Task {
-                                        _ = await appState.exportCurrentMeeting(target: "markdown")
+                    case .speakers:
+                        ReviewSpeakersView(
+                            meeting: meeting,
+                            clusters: appState.currentClusters,
+                            attendees: appState.currentAttendees,
+                            utterances: appState.currentUtterances,
+                            voiceprints: appState.voiceprints,
+                            onAssign: { clusterId, person in
+                                if let idx = appState.currentClusters.firstIndex(where: { $0.id == clusterId }) {
+                                    appState.currentClusters[idx].label = person.displayName
+                                    appState.currentClusters[idx].personId = person.id
+                                    appState.currentClusters[idx].assignment = "user"
+                                    try? appState.store.saveSpeakerClusters(appState.currentClusters)
+                                }
+                            },
+                            onLockAndEnroll: { updatedClusters in
+                                for c in updatedClusters where !c.centroid.isEmpty {
+                                    if let pId = c.personId {
+                                        let vp = Voiceprint(personId: pId, vector: c.centroid, speechSeconds: c.speechSeconds)
+                                        try? appState.store.saveVoiceprint(vp)
                                     }
                                 }
-                            )
-                        } else {
-                            VStack(spacing: 12) {
-                                Text("No summary generated for this meeting yet.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(MinutesTheme.muted)
-                                Button("Generate AI Summary") {
-                                    Task {
-                                        let s = Summarizer()
-                                        let sum = try? await s.summarize(
-                                            meeting: meeting,
-                                            utterances: appState.currentUtterances,
-                                            attendees: appState.currentAttendees
-                                        )
-                                        if let sum = sum {
-                                            try? appState.store.saveSummary(sum)
-                                            appState.currentSummary = sum
-                                        }
+                                try? appState.store.saveSpeakerClusters(updatedClusters)
+                                appState.voiceprints = appState.store.listVoiceprints()
+                            },
+                            onReassignUtterances: { clusterId, newName in
+                                for i in 0..<appState.currentUtterances.count {
+                                    if appState.currentUtterances[i].clusterId == clusterId || appState.currentUtterances[i].speakerName == clusterId {
+                                        appState.currentUtterances[i].speakerName = newName
                                     }
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(MinutesTheme.primary)
+                                try? appState.store.saveUtterances(appState.currentUtterances)
                             }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
+                        )
                     }
                 } else {
                     VStack(spacing: 12) {

@@ -59,27 +59,25 @@ public final class ClusterManager: Sendable {
         let before = clusterUtterances.filter { $0.start < boundaryTimestamp }
         let after = clusterUtterances.filter { $0.start >= boundaryTimestamp }
         
-        let dur1 = before.reduce(0.0) { $0 + ($1.end - $1.start) }
-        let dur2 = after.reduce(0.0) { $0 + ($1.end - $1.start) }
+        let dur1: Double
+        let dur2: Double
+        if clusterUtterances.isEmpty {
+            dur1 = cluster.speechSeconds * 0.5
+            dur2 = cluster.speechSeconds * 0.5
+        } else {
+            dur1 = before.reduce(0.0) { $0 + ($1.end - $1.start) }
+            dur2 = after.reduce(0.0) { $0 + ($1.end - $1.start) }
+        }
         
         let id1 = cluster.id + "_part1"
         let id2 = cluster.id + "_part2"
         let label1 = "\(cluster.label) (Part 1)"
         let label2 = "\(cluster.label) (Part 2)"
         
-        // Derive distinctive sub-centroids from original centroid
+        // Derive sub-centroids without artificial perturbation
         var centroid1 = cluster.centroid
         var centroid2 = cluster.centroid
         if !cluster.centroid.isEmpty {
-            for i in 0..<centroid1.count {
-                if i % 2 == 0 {
-                    centroid1[i] += 0.02
-                    centroid2[i] -= 0.02
-                } else {
-                    centroid1[i] -= 0.02
-                    centroid2[i] += 0.02
-                }
-            }
             centroid1 = VectorMath.l2Normalize(centroid1)
             centroid2 = VectorMath.l2Normalize(centroid2)
         }
