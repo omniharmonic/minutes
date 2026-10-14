@@ -108,7 +108,7 @@ public final class ParachuteAdapter: ExportAdapter {
     public let tokenProvider: @Sendable () -> String?
     
     public init(
-        vaultHost: String = "http://localhost:1940",
+        vaultHost: String = "http://127.0.0.1:1940",
         vaultName: String = "default",
         tokenProvider: (@Sendable () -> String?)? = nil
     ) {
@@ -119,19 +119,19 @@ public final class ParachuteAdapter: ExportAdapter {
     
     public static func mintTokenFromCLI() -> String? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/Users/benjaminlife/.bun/bin/parachute")
-        process.environment = ProcessInfo.processInfo.environment
-        process.arguments = ["auth", "mint-token", "--scope", "vault:default:write", "--ephemeral"]
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", "export PATH=\"$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; /Users/benjaminlife/.bun/bin/parachute auth mint-token --scope vault:default:write --ephemeral"]
         let pipe = Pipe()
-        let errPipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = errPipe
         do {
             try process.run()
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (token?.isEmpty ?? true) ? nil : token
+            if let t = token, !t.isEmpty, t.starts(with: "ey") {
+                return t
+            }
+            return nil
         } catch {
             return nil
         }
@@ -230,6 +230,7 @@ public final class ParachuteAdapter: ExportAdapter {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(token, forHTTPHeaderField: "X-API-Key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         
@@ -255,6 +256,7 @@ public final class ParachuteAdapter: ExportAdapter {
         var req = URLRequest(url: url)
         req.httpMethod = "PATCH"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(token, forHTTPHeaderField: "X-API-Key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         

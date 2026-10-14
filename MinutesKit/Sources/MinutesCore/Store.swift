@@ -397,7 +397,7 @@ public final class MinutesStore: @unchecked Sendable {
         defer { lock.unlock() }
         
         let sql = """
-        INSERT INTO utterance (id, meeting_id, cluster_id, speaker_name, start, end, text, words_json)
+        INSERT OR REPLACE INTO utterance (id, meeting_id, cluster_id, speaker_name, start, end, text, words_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """
         for u in utterances {

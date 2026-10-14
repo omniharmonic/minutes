@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "MinutesCalendar", targets: ["MinutesCalendar"]),
         .library(name: "MinutesSummarize", targets: ["MinutesSummarize"]),
         .library(name: "MinutesExport", targets: ["MinutesExport"]),
+        .library(name: "MinutesUI", targets: ["MinutesUI"]),
         .executable(name: "minutes-cli", targets: ["minutes-cli"])
     ],
     dependencies: [],
@@ -43,6 +44,10 @@ let package = Package(
         .target(
             name: "MinutesExport",
             dependencies: ["MinutesCore"]
+        ),
+        .target(
+            name: "MinutesUI",
+            dependencies: ["MinutesCore", "MinutesSpeakerID"]
         ),
         .executableTarget(
             name: "minutes-cli",
