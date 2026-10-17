@@ -214,3 +214,5 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] 336 model-free tests passed, followed by six focused folder tests including a new app-selection regression. Synthetic CLI and native iPhone simulator delete/restore passed; simulator original database restored.
 - [x] iOS44 archive/export/upload succeeded. Mac44 signed/notarized/stapled, installed and verified with strict codesign/Gatekeeper and native UI inspection. No capture/playback.
 - [ ] External TestFlight remains gated on Apple's build41 review;44 supersedes43 for the next public beta update. See docs/release/2026-10-17-build43.md for both builds.
+
+2026-10-17: Apple processed build44 (c922a7d8-2af7-44ca-b15e-696aa50857ea), assigned Minutes Internal and saved What to Test. Build41 remains Waiting for Review; Apple blocks a second external review submission for version1.0.0 until approval. Evidence: build/Release44/TestFlight44-saved.png. Physical TestFlight installation of44 has not been verified.
