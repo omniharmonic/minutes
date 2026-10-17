@@ -32,4 +32,17 @@ struct LiveVoiceMatcherTests {
         #expect(try await identify([segment()], seconds: 2) == nil)
         #expect(try await identify([segment()], model: "legacy") == nil)
     }
+    @Test func stableIdentityIsReturnedAndCompetingProfilesAbstain() async throws {
+        let matcher = LiveVoiceMatcher(backend: CaptionSpeakerBackend(segments: [segment()]))
+        let samples = Array(repeating: Float(0.1), count: 128_000)
+        let profile = Voiceprint(personId: person.id, model: SpeakerEmbeddingModel.trainedID, vector: vector, speechSeconds: 30)
+        let result = try await matcher.evaluate(samples: samples, rate: 16_000, people: [person], voiceprints: [profile])
+        #expect(result.personID == person.id)
+        let other = Person(id: "other", displayName: person.displayName)
+        let competing = Voiceprint(personId: other.id, model: SpeakerEmbeddingModel.trainedID, vector: vector, speechSeconds: 30)
+        let ambiguous = try await matcher.evaluate(samples: samples, rate: 16_000, people: [person, other], voiceprints: [profile, competing])
+        #expect(ambiguous.personID == nil)
+        #expect(ambiguous.name == nil)
+    }
+
 }

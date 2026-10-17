@@ -1,0 +1,36 @@
+{
+  "build": 49,
+  "holdout_batch": {
+    "clusters": 2,
+    "expected_matches": 1,
+    "other_matches": 0,
+    "expected_speech_seconds": 35.7,
+    "detected_speech_seconds": 40.0
+  },
+  "holdout_live": {
+    "windows": 5,
+    "expected_matches": 3,
+    "other_matches": 0,
+    "weak_or_ambiguous": 1,
+    "too_short": 1
+  },
+  "synthetic_negative": {
+    "windows": 11,
+    "expected_matches": 0,
+    "other_matches": 0
+  },
+  "native_after_restart": {
+    "owner_labels_visible": 3,
+    "recognition_sessions": 5,
+    "retries": 0,
+    "dropped_batches": 0,
+    "microphone": false,
+    "playback": false
+  },
+  "profiles_changed": false,
+  "thresholds_lowered": false,
+  "tests_passed": 352,
+  "ios_build": "passed",
+  "mac_signed_notarized_installed": true,
+  "limitation": "Limited sample validation; cross-condition accuracy remains unproven."
+}

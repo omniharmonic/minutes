@@ -25,6 +25,7 @@ private final class CaptionPanel: NSPanel {
     private let voiceMatcher = LiveVoiceMatcher()
     private var pendingNames: [String: String] = [:]
     private var identityTask: Task<Void, Never>?
+    private var identityQueue = LiveVoiceWindowQueue()
     private var panel: CaptionPanel?
     private let recognizer = LiveCaptionRecognizer()
     private var demoTask: Task<Void, Never>?
@@ -40,26 +41,42 @@ private final class CaptionPanel: NSPanel {
     func begin() {
         guard enabled else { return }
         generation = UUID(); identityTask?.cancel(); identityTask = nil; demoTask?.cancel(); model.demo = false
-        pendingNames.removeAll()
+        pendingNames.removeAll(); identityQueue.removeAll()
         model.history = LiveCaptionHistory(); model.recording = true; model.following = true
         model.status = "Listening locally · preview may change"
         do {
-            let (people, voices) = savedVoices()
+            let (_, voices) = savedVoices()
             let token = generation
             let identify: LiveCaptionRecognizer.AudioWindow = { [weak self] id, samples, rate in
-                guard let self, self.identityTask == nil else { return } // No inference backlog.
+                guard let self else { return }
+                guard self.identityQueue.append(.init(id: id, samples: samples, rate: rate)) else {
+                    self.model.status = "Voice matching is catching up · some captions may stay unnamed"
+                    return
+                }
+                guard self.identityTask == nil else { return }
                 self.identityTask = Task { [weak self] in
                     guard let self else { return }
                     defer { if self.generation == token { self.identityTask = nil } }
-                    do {
-                        let name = try await self.voiceMatcher.name(samples: samples, rate: rate, people: people, voiceprints: voices)
-                        guard !Task.isCancelled, self.generation == token, let name else { return }
-                        if self.pendingNames.count >= 200 { self.pendingNames.removeAll() }
-                        self.pendingNames[id] = name
-                        self.model.history.identify(id: id, name: name)
-                    } catch {
-                        guard !Task.isCancelled, self.generation == token else { return }
-                        self.model.status = "Live voice matching unavailable · captions and recording continue"
+                    while !Task.isCancelled, self.generation == token,
+                          let window = self.identityQueue.next() {
+                        do {
+                            // Re-read consented profiles: forget/remember actions apply to pending work.
+                            let (currentPeople, currentVoices) = self.savedVoices()
+                            let result = try await self.voiceMatcher.evaluate(samples: window.samples, rate: window.rate,
+                                people: currentPeople, voiceprints: currentVoices)
+                            guard !Task.isCancelled, self.generation == token else { return }
+                            // Never apply an identity removed while inference was running.
+                            let (latestPeople, latestVoices) = self.savedVoices()
+                            guard let personID = result.personID,
+                                  let name = latestPeople.first(where: { $0.id == personID })?.displayName,
+                                  currentVoices.filter({ $0.personId == personID }).map(\.id).sorted() == latestVoices.filter({ $0.personId == personID }).map(\.id).sorted() else { continue }
+                            if self.pendingNames.count >= 200 { self.pendingNames.removeAll() }
+                            self.pendingNames[window.id] = name
+                            self.model.history.identify(id: window.id, name: name)
+                        } catch {
+                            guard !Task.isCancelled, self.generation == token else { return }
+                            self.model.status = "Live voice matching unavailable · captions and recording continue"
+                        }
                     }
                 }
             }
@@ -78,13 +95,14 @@ private final class CaptionPanel: NSPanel {
         Task { [weak self] in
             guard let self else { return }
             await self.recognizer.finish()
+            await self.identityTask?.value
             guard self.generation == token else { return }
             self.model.history.finish()
         }
         model.status = "Recording ended · final transcript is in Minutes"
     }
     func close() {
-        generation = UUID(); identityTask?.cancel(); identityTask = nil; enabled = false; demoTask?.cancel(); demoTask = nil; recognizer.stop()
+        generation = UUID(); identityTask?.cancel(); identityTask = nil; identityQueue.removeAll(); enabled = false; demoTask?.cancel(); demoTask = nil; recognizer.stop()
         model.recording = false; panel?.orderOut(nil)
     }
     func focus() { present(); panel?.makeKeyAndOrderFront(nil) }
@@ -104,6 +122,7 @@ private final class CaptionPanel: NSPanel {
             }
             guard let self, self.generation == token else { return }
             await self.recognizer.finish()
+            await self.identityTask?.value
             guard self.generation == token else { return }
             self.model.recording = false; self.model.history.finish()
             self.model.status = self.model.history.lines.isEmpty ? "No preview text received · check local Speech availability" : "File preview complete · \(self.recognizer.diagnostics.sessionsStarted) recognition sessions · \(self.recognizer.diagnostics.recognitionRetries) retries · \(self.recognizer.diagnostics.droppedBatches) dropped batches"

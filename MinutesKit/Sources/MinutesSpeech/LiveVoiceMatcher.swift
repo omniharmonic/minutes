@@ -6,9 +6,10 @@ import MinutesSpeakerID
 /// Disposable caption attribution; never writes profiles, people, or final transcripts.
 public actor LiveVoiceMatcher {
     public struct Evaluation: Sendable {
+        public let personID: String?
         public let name: String?
         public let reason: String
-        public init(name: String? = nil, reason: String) { self.name = name; self.reason = reason }
+        public init(personID: String? = nil, name: String? = nil, reason: String) { self.personID = personID; self.name = name; self.reason = reason }
     }
     private let backend: any SpeakerDiarizationBackend
     public init(backend: any SpeakerDiarizationBackend = FluidDiarizationBackend()) { self.backend = backend }
@@ -44,7 +45,7 @@ public actor LiveVoiceMatcher {
             .match(clusters: [cluster], people: people, voiceprints: voiceprints, attendeePersonIds: [])
         guard let match = result.first, match.assignment == "auto",
               let name = match.personName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Evaluation(reason: "weak-or-ambiguous-match") }
-        return Evaluation(name: name, reason: "matched")
+        return Evaluation(personID: match.personId, name: name, reason: "matched")
     }
 
     private static func resample(_ samples: [Float], rate: Double) throws -> [Float] {

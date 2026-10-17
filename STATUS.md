@@ -235,3 +235,12 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] 349 model-free tests passed; iOS simulator compatibility build passed; Mac48 signed, notarized and installed with matching binary/signature.
 - [~] Personal-profile reuse tested silently against two existing recordings: 0/9 windows confidently named, no other-person matches, no profiles changed. Reliable personal live naming remains open.
 - Validation details and native final-build result: `docs/release/2026-10-17-caption-stability.md`.
+
+
+## 2026-10-17 voice reuse / Mac build49
+
+- [x] New owner-confirmed baseline reused automatically in independent untagged recording after fresh store open: 35.7 seconds named; 4.3-second fragment abstained.
+- [x] Installed caption panel after app restart showed three owner labels; zero retries/dropped batches. Live windows: 3 matched, 1 weak, 1 too short. Synthetic other-speaker control: zero false owner matches.
+- [x] Replaced silent busy-inference drops with bounded FIFO; refresh profiles for pending work; stable identity IDs; await queued analysis at caption finish.
+- [x] 352 tests, iOS compatibility build, signed/notarized Mac49 install verified.
+- [~] Robust cross-condition real-human accuracy remains an open acceptance gate; thresholds unchanged, no promise of perfect identification. See `docs/release/2026-10-17-voice-reuse.md`.

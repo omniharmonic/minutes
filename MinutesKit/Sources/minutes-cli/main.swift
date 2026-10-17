@@ -33,6 +33,7 @@ func printHelp() {
       minutes-cli audio-input
       minutes-cli capture-system --output-dir <new-directory> --seconds <duration> [--system-only] [--request-permission]
       minutes-cli caption-fixture
+      minutes-cli voice-audit-file <audio-path> --expect-person <local-person-id> [--data-dir <path>]
       minutes-cli caption-voice-file <audio-path> [--data-dir <path>] [--expect-person <local-person-id>]
       minutes-cli caption-file <audio-path>  (silent local preview; existing Speech consent required)
       minutes-cli models status|setup|prepare
@@ -85,6 +86,22 @@ struct MinutesCLI {
                 print("Sessions: \(stats.sessionsStarted); scheduled rotations: \(stats.scheduledRotations); retries: \(stats.recognitionRetries); dropped batches: \(stats.droppedBatches)")
                 return
             }
+            if cmd == "voice-audit-file", args.count >= 3 {
+                let store = try getStore(dataDir: dataDir)
+                guard let index = args.firstIndex(of: "--expect-person"), index + 1 < args.count,
+                      store.getPerson(id: args[index + 1]) != nil else { throw CocoaError(.fileReadNoSuchFile) }
+                let expectedID = args[index + 1]
+                let samples = try AudioDecoder.decode(fileURL: URL(fileURLWithPath: args[2]), targetSampleRate: 16000).samples
+                let result = try await DiarizationService().diarize(samples: samples, meetingId: "local-voice-audit")
+                let identified = RememberedSpeakerIdentification.apply(clusters: result.clusters, utterances: [],
+                    people: store.listPeople(), voiceprints: store.listVoiceprints())
+                let expected = identified.clusters.filter { $0.assignment == "auto" && $0.personId == expectedID }
+                let other = identified.clusters.filter { $0.assignment == "auto" && $0.personId != expectedID }
+                let seconds = expected.reduce(0) { $0 + $1.speechSeconds }
+                print("Batch audit: \(identified.clusters.count) clusters; expected-person matches: \(expected.count); other-person matches: \(other.count); unnamed: \(identified.clusters.count - expected.count - other.count).")
+                print("Expected-person speech seconds: \(String(format: "%.1f", seconds)); detected speech seconds: \(String(format: "%.1f", result.speechDuration)). No meetings or profiles changed.")
+                return
+            }
             if cmd == "caption-voice-file", args.count >= 3 {
                 let store = try getStore(dataDir: dataDir)
                 let samples = try AudioDecoder.decode(fileURL: URL(fileURLWithPath: args[2]), targetSampleRate: 16000).samples
@@ -101,10 +118,10 @@ struct MinutesCLI {
                         people: store.listPeople(), voiceprints: store.listVoiceprints())
                     reasons[evaluation.reason, default: 0] += 1
                     windows += 1
-                    if let name = evaluation.name {
+                    if evaluation.personID != nil {
                         named += 1
-                        if let expectedName {
-                            if name == expectedName { expectedMatches += 1 } else { unexpectedMatches += 1 }
+                        if expectedName != nil {
+                            if evaluation.personID == expectedID { expectedMatches += 1 } else { unexpectedMatches += 1 }
                         }
                     }
                 }
