@@ -997,6 +997,7 @@ public final class AppState: ObservableObject {
         do {
             _ = try await sendToPrism(bundle)
             prismMessage = "Automatically exported the completed transcript and AI summary."
+            statusMessage = "Transcript and AI summary saved and exported to Prism."
         } catch {
             prismMessage = "Local transcript and AI summary saved. Automatic export needs attention: \(error.localizedDescription)"
         }

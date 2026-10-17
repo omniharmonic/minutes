@@ -268,3 +268,7 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 
 ### 2026-10-17 — explicit file export and Prism destinations
 - Implemented native Markdown Save As on Mac/iOS, configurable Prism folder, optional successful-AI-summary export and capability-gated server folder support. Queue payloads retain destination and idempotency identity. Silent Swift regression and 23 Prism integration tests pass; isolated staging upgraded, phone build 50 built (including preventing idle screen timeout during processing). Mac build 53 installed: native Save As and custom-folder staging receipt verified. iPhone Save As, automatic post-summary delivery and manual-lock lifecycle remain to verify.
+
+### 2026-10-17 — physical lock and automatic Prism acceptance
+- iPhone build 52: isolated synthetic audio passed transcription → lock during AI summary → unlock/resume → committed automatic staging export. Locked and unlocked transcripts/timestamps match (270 words, ~104 s). Original personal recording untouched; normal library reopened after test.
+- Fixed reproduced stale “waiting for receipt” status after successful automatic delivery. Opt-in live acceptance verifies real local AI generation, receipt, duplicate-free resync, disabled-export gate and extractive-summary exclusion. Earlier apparent crash not reproduced; force-quit/low-memory recovery remains outside this result. See `docs/PROCESSING_LOCK_ACCEPTANCE.md`.

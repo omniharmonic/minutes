@@ -14,7 +14,14 @@ private final class IOSStartup: ObservableObject {
 
     init() { retry() }
     func retry() {
-        do { state = try AppState(); error = nil }
+        do {
+            #if DEBUG
+            state = try ProcessingAcceptance.enabled ? ProcessingAcceptance.makeState() : AppState()
+            #else
+            state = try AppState()
+            #endif
+            error = nil
+        }
         catch { self.error = error.localizedDescription }
     }
 }
@@ -59,6 +66,18 @@ private struct IOSRootView: View {
     var body: some View {
         NavigationStack {
             List {
+                #if DEBUG
+                if ProcessingAcceptance.enabled {
+                    Section("Synthetic lock test · separate library") {
+                        Text(state.statusMessage)
+                        Text(state.prismMessage).font(.caption)
+                        Button("Start silent synthetic processing") {
+                            Task { await ProcessingAcceptance.run(state: state) }
+                        }.disabled(state.isProcessing || state.isSummarizing)
+                        Text("After tapping Start, lock the phone for one minute, then reopen Minutes. Personal recordings are not used.").font(.caption)
+                    }
+                }
+                #endif
                 Section {
                     NavigationLink { upcomingList } label: { homeShortcutLabel("Upcoming", symbol: "calendar", color: .blue) }
                     NavigationLink { IOSPeopleDirectory(state: state) } label: { homeShortcutLabel("People", symbol: "person.2.fill", color: .cyan) }
@@ -144,9 +163,22 @@ private struct IOSRootView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             UIApplication.shared.isIdleTimerDisabled = processingNeedsScreen && phase == .active
+            #if DEBUG
+            ProcessingAcceptance.record("scene-\(phase)", state: state)
+            #endif
         }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
-        .task { await state.restoreCalendarConnections() }
+        .task {
+            #if DEBUG
+            if ProcessingAcceptance.enabled { return }
+            #endif
+            await state.restoreCalendarConnections()
+        }
+        .onChange(of: state.statusMessage) { _, _ in
+            #if DEBUG
+            ProcessingAcceptance.record("status", state: state)
+            #endif
+        }
         .task { await state.restorePrismConnection() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio, .movie, .plainText]) { result in
             switch result {
