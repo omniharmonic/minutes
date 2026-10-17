@@ -189,3 +189,5 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] Research-only roadmaps: optional server meeting capture, live captions/notch and encrypted opt-in voiceprint sync, with official eligibility/platform gates.
 - [ ] Physical AirPods switch and audible sample validation; human multi-voice calibration; unrelated cleanMac install; Google registration provisioning for freshMacs; iOS public TestFlight/App Store delivery.
 - Release report: docs/release/2026-10-17-preview.md. Public installers/private source explicitly authorized; Minutes preview Google limitation accepted.
+
+- 2026-10-17 release completed: source implementation `50c89cb`/tag `minutes-v1.0.0-preview.40` pushed to private GitHub. Public installers in downloads repository; anonymous fetch/SHA/signature/notarization validation passed. Mac+iPhone40 installed; no capture/playback. See release report for exact hashes and limits.
