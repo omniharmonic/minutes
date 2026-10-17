@@ -37,3 +37,12 @@ struct LiveCaptionHistoryTests {
     #expect(history.lines.count == 1)
     #expect(history.lines.first?.speakerName == nil)
 }
+
+@Test func lateFinalWordsKeepChronologicalOrderAcrossRecognitionHandoffs() {
+    var history = LiveCaptionHistory()
+    history.update(id: "new", text: "Next speaker", source: "Mac audio", isFinal: false, order: 4)
+    history.update(id: "old-tail", text: "Previous speaker's last words", source: "Mac audio", isFinal: true, order: 3)
+    #expect(history.lines.map(\.id) == ["old-tail", "new"])
+    history.update(id: "new", text: "", source: "Mac audio", isFinal: false, order: 4)
+    #expect(history.lines.map(\.id) == ["old-tail"])
+}

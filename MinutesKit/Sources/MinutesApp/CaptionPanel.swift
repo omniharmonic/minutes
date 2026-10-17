@@ -23,6 +23,7 @@ private final class CaptionPanel: NSPanel {
     let model = CaptionPanelModel()
     var savedVoices: () -> ([Person], [Voiceprint]) = { ([], []) }
     private let voiceMatcher = LiveVoiceMatcher()
+    private var pendingNames: [String: String] = [:]
     private var identityTask: Task<Void, Never>?
     private var panel: CaptionPanel?
     private let recognizer = LiveCaptionRecognizer()
@@ -39,6 +40,7 @@ private final class CaptionPanel: NSPanel {
     func begin() {
         guard enabled else { return }
         generation = UUID(); identityTask?.cancel(); identityTask = nil; demoTask?.cancel(); model.demo = false
+        pendingNames.removeAll()
         model.history = LiveCaptionHistory(); model.recording = true; model.following = true
         model.status = "Listening locally · preview may change"
         do {
@@ -52,6 +54,8 @@ private final class CaptionPanel: NSPanel {
                     do {
                         let name = try await self.voiceMatcher.name(samples: samples, rate: rate, people: people, voiceprints: voices)
                         guard !Task.isCancelled, self.generation == token, let name else { return }
+                        if self.pendingNames.count >= 200 { self.pendingNames.removeAll() }
+                        self.pendingNames[id] = name
                         self.model.history.identify(id: id, name: name)
                     } catch {
                         guard !Task.isCancelled, self.generation == token else { return }
@@ -59,9 +63,11 @@ private final class CaptionPanel: NSPanel {
                     }
                 }
             }
-            try recognizer.start(audioWindow: voices.isEmpty ? nil : identify, update: { [weak self] id, text, source, final in
-                self?.model.history.update(id: id, text: text, source: source, isFinal: final)
-            }, notice: { [weak self] message in self?.model.status = message })
+            try recognizer.start(audioWindow: voices.isEmpty ? nil : identify, update: { [weak self] id, text, source, final, order in
+                guard let self else { return }
+                self.model.history.update(id: id, text: text, source: source, isFinal: final, order: order)
+                if let name = self.pendingNames[id] { self.model.history.identify(id: id, name: name) }
+            }, notice: { [weak self] message in if self?.model.recording == true { self?.model.status = message } })
         } catch { model.recording = false; model.status = "Captions unavailable: \(error.localizedDescription)" }
         present()
     }
@@ -100,7 +106,7 @@ private final class CaptionPanel: NSPanel {
             await self.recognizer.finish()
             guard self.generation == token else { return }
             self.model.recording = false; self.model.history.finish()
-            self.model.status = self.model.history.lines.isEmpty ? "No preview text received · check local Speech availability" : "File preview complete · no audio was played"
+            self.model.status = self.model.history.lines.isEmpty ? "No preview text received · check local Speech availability" : "File preview complete · \(self.recognizer.diagnostics.sessionsStarted) recognition sessions · \(self.recognizer.diagnostics.recognitionRetries) retries · \(self.recognizer.diagnostics.droppedBatches) dropped batches"
         }
     }
     func preview() {

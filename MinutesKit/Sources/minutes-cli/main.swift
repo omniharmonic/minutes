@@ -33,7 +33,7 @@ func printHelp() {
       minutes-cli audio-input
       minutes-cli capture-system --output-dir <new-directory> --seconds <duration> [--system-only] [--request-permission]
       minutes-cli caption-fixture
-      minutes-cli caption-voice-file <audio-path> [--data-dir <path>]
+      minutes-cli caption-voice-file <audio-path> [--data-dir <path>] [--expect-person <local-person-id>]
       minutes-cli caption-file <audio-path>  (silent local preview; existing Speech consent required)
       minutes-cli models status|setup|prepare
       minutes-cli events [--today | --days 7] [--json] [--request-access]
@@ -75,26 +75,42 @@ struct MinutesCLI {
             if ["help", "--help", "-h"].contains(cmd) { printHelp(); return }
             if cmd == "caption-file", args.count >= 3 {
                 let recognizer = LiveCaptionRecognizer()
-                try recognizer.start(update: { _, text, source, final in
+                try recognizer.start(audioWindow: { _, _, _ in }, update: { _, text, source, final, _ in
                     print("[\(source)] \(final ? "final" : "partial"): \(text)")
                 }, notice: { print($0) })
                 defer { recognizer.stop() }
                 try await CaptionFileFixture.feed(url: URL(fileURLWithPath: args[2]))
                 await recognizer.finish()
+                let stats = recognizer.diagnostics
+                print("Sessions: \(stats.sessionsStarted); scheduled rotations: \(stats.scheduledRotations); retries: \(stats.recognitionRetries); dropped batches: \(stats.droppedBatches)")
                 return
             }
             if cmd == "caption-voice-file", args.count >= 3 {
                 let store = try getStore(dataDir: dataDir)
                 let samples = try AudioDecoder.decode(fileURL: URL(fileURLWithPath: args[2]), targetSampleRate: 16000).samples
                 let matcher = LiveVoiceMatcher()
-                var windows = 0, named = 0
+                var windows = 0, named = 0, expectedMatches = 0, unexpectedMatches = 0
+                var reasons: [String: Int] = [:]
+                let expectedIndex = args.firstIndex(of: "--expect-person")
+                let expectedID = expectedIndex.flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+                let expectedName = store.listPeople().first { $0.id == expectedID }?.displayName
+                if expectedID != nil && expectedName == nil { throw CocoaError(.fileReadNoSuchFile) }
                 for start in stride(from: 0, to: samples.count, by: 10 * 16000) {
                     let slice = Array(samples[start..<min(samples.count, start + 10 * 16000)])
-                    let name = try await matcher.name(samples: slice, rate: 16000,
+                    let evaluation = try await matcher.evaluate(samples: slice, rate: 16000,
                         people: store.listPeople(), voiceprints: store.listVoiceprints())
-                    windows += 1; if name != nil { named += 1 }
+                    reasons[evaluation.reason, default: 0] += 1
+                    windows += 1
+                    if let name = evaluation.name {
+                        named += 1
+                        if let expectedName {
+                            if name == expectedName { expectedMatches += 1 } else { unexpectedMatches += 1 }
+                        }
+                    }
                 }
                 print("Caption voice windows: \(windows); provisional matches: \(named). No profiles changed.")
+                print("Decisions: " + reasons.keys.sorted().map { "\($0)=\(reasons[$0]!)" }.joined(separator: ", "))
+                if expectedID != nil { print("Expected-person matches: \(expectedMatches); other-person matches: \(unexpectedMatches); unnamed: \(windows - named).") }
                 return
             }
             if cmd == "caption-fixture" {

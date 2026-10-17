@@ -1,0 +1,25 @@
+{
+  "build": 48,
+  "synthetic_native_file_preview": {
+    "duration_seconds": 110,
+    "trailing_digital_silence_seconds": 30,
+    "recognition_sessions": 8,
+    "failure_retries": 0,
+    "dropped_batches": 0,
+    "opening_history_retained": true,
+    "last_turn_retained": true,
+    "microphone_used": false,
+    "playback_used": false
+  },
+  "personal_voice_check": {
+    "recordings": 2,
+    "windows": 9,
+    "expected_matches": 0,
+    "other_matches": 0,
+    "profiles_changed": false,
+    "reliable_naming_validated": false
+  },
+  "model_free_tests_passed": 349,
+  "ios_simulator_build": "passed",
+  "signed_notarized_installed": true
+}
