@@ -86,6 +86,9 @@ public struct MinutesApp: App {
         .defaultSize(width: 1292, height: 864)
         .commands {
             CommandGroup(after: .textEditing) {
+                Button("Find in Transcript") { NotificationCenter.default.post(name: Notification.Name("MinutesFindInTranscript"), object: nil) }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .disabled(startup.state?.currentMeeting == nil)
                 Button("Search Meetings") { NotificationCenter.default.post(name: Notification.Name("MinutesFocusLibrarySearch"), object: nil) }
                     .keyboardShortcut("f", modifiers: [.command, .option])
             }

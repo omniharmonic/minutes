@@ -8,6 +8,14 @@ Current processing uses **Apple Speech with mandatory on-device recognition** an
 
 Signed Mac previews and setup guides are published in [Minutes & StudioLink Downloads](https://github.com/omniharmonic/minutes-studiolink-downloads). Sources stay private. iPhone development installs are paired-device tests, not public App Store/TestFlight distribution. See [release setup](docs/RELEASE_SETUP.md) for known limits.
 
+## Find within a transcript
+
+Open a meeting and choose **Find in transcript** below its Transcript disclosure (or use the iPhone meeting’s More menu). On Mac, **Command-F** opens this meeting’s transcript search; **Option-Command-F** searches the library. Search is local, case/accent insensitive and literal. Matches in words and speaker names are highlighted in context, with a count and previous/next controls (Command-G / Shift-Command-G on Mac). Finding a match scrolls the text without starting playback. Transcript editing remains available from each segment’s pencil.
+
+CLI: `minutes-cli find-transcript <meeting-id> <query> [--data-dir <path>]` emits matching segment IDs/fields/offsets, without transcript contents.
+
+Future research is indexed in [future features](docs/research/FUTURE_FEATURES.md): optional server meeting capture, local live captions/camera-adjacent UI, and separately consented voiceprint sync. These remain research plans, not shipped capabilities.
+
 ## Build and test
 
 Requires macOS 15+, Xcode 26 or newer (Swift 6 language mode), and Apple Silicon for the current local speech stack.

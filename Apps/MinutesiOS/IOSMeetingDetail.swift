@@ -9,7 +9,7 @@ struct IOSMeetingDetail: View {
     @ObservedObject var state: AppState
     let meetingID: String
     var showsRecording = false
-    @State private var editing: Utterance?
+    @State private var transcriptFindRequest = 0
     @State private var view = "Notes"
     @State private var moveError: String?
 
@@ -56,12 +56,13 @@ struct IOSMeetingDetail: View {
                             isSummarizing: state.isSummarizing,
                 playbackAllowed: !state.isRecording && !state.isStartingRecording && !state.isFinalizingRecording,
                             usesAppleIntelligence: state.summaryUsesAppleIntelligence,
-                            onEnableAppleSummary: { state.summaryUsesAppleIntelligence = true; Task { await state.generateCurrentSummary() } })
+                            onEnableAppleSummary: { state.summaryUsesAppleIntelligence = true; Task { await state.generateCurrentSummary() } },
+                            onFindTranscript: findInTranscript)
                     }.padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 80).id(meetingID)
                 }.background(MinutesTheme.document)
             } else { ProgressView() }
         }
-        .navigationTitle(view == "Speakers" ? "Speakers" : "")
+        .navigationTitle(view == "Notes" ? "" : view)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { state.selectMeeting(id: meetingID) }
         .safeAreaInset(edge: .bottom) {
@@ -94,6 +95,8 @@ struct IOSMeetingDetail: View {
                     ShareLink(item: state.currentUtterances.map { "\($0.speakerName): \($0.text)" }.joined(separator: "\n\n"))
                 }
                 Menu {
+                    Button("Find in Transcript", systemImage: "magnifyingglass", action: findInTranscript)
+                        .disabled(state.currentUtterances.isEmpty)
                     Picker("Meeting view", selection: $view) {
                         Text("Notes").tag("Notes")
                         Text("Transcript").tag("Transcript")
@@ -117,14 +120,6 @@ struct IOSMeetingDetail: View {
         .alert("Could not move meeting", isPresented: Binding(get: { moveError != nil }, set: { if !$0 { moveError = nil } })) {
             Button("OK") { moveError = nil }
         } message: { Text(moveError ?? "") }
-        .sheet(item: $editing) { utterance in
-            IOSUtteranceEditor(utterance: utterance) { updated in
-                var utterances = state.currentUtterances
-                if let index = utterances.firstIndex(where: { $0.id == updated.id }) { utterances[index] = updated }
-                try state.store.saveUtterances(utterances)
-                state.selectMeeting(id: meetingID)
-            }
-        }
     }
     private var hasSavedAudio: Bool {
         guard let path = state.currentMeeting?.audioPath,
@@ -133,17 +128,29 @@ struct IOSMeetingDetail: View {
         // failed captures cannot yield a transcript or recovery copy.
         return size > 4096
     }
+    private func findInTranscript() {
+        view = "Transcript"
+        transcriptFindRequest += 1
+    }
     private var transcript: some View {
-        List(state.currentUtterances) { utterance in
-            Button { editing = utterance } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(state.currentMeeting?.platform == "transcript_import" ? "\(utterance.speakerName) · Untimed" : "\(utterance.speakerName) · \(Int(utterance.start))s")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text(utterance.text).foregroundStyle(.primary)
+        TranscriptView(utterances: state.currentUtterances, availableSpeakers: state.currentClusters.map(\.label),
+            clusters: state.currentClusters, timestampsAvailable: state.currentMeeting?.platform != "transcript_import",
+            findRequest: transcriptFindRequest,
+            onSeek: { time in
+                guard !state.isRecording && !state.isStartingRecording && !state.isFinalizingRecording,
+                      let meeting = state.currentMeeting, meeting.platform != "transcript_import", let path = meeting.audioPath else { return }
+                save {
+                    try AudioPlaybackService.shared.loadAudio(path: path)
+                    AudioPlaybackService.shared.play(from: time)
                 }
-            }
-        }.listStyle(.plain)
-        .overlay { if state.currentUtterances.isEmpty { ContentUnavailableView("No Transcript", systemImage: "text.alignleft", description: Text("Import a transcript or process saved audio to begin.")) } }
+            },
+            onUtteranceEdited: { updated in
+                save {
+                    try state.store.saveUtterances([updated])
+                    state.selectMeeting(id: meetingID)
+                }
+            })
+            .id(meetingID)
     }
     private func save(_ operation: () throws -> Void) {
         do {
@@ -152,41 +159,6 @@ struct IOSMeetingDetail: View {
                 state.meetings[index] = meeting
             }
         } catch { state.statusMessage = "Could not save: \(error.localizedDescription)" }
-    }
-}
-
-private struct IOSUtteranceEditor: View {
-    let utterance: Utterance
-    let save: (Utterance) throws -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var text: String
-    @State private var error: String?
-
-    init(utterance: Utterance, save: @escaping (Utterance) throws -> Void) {
-        self.utterance = utterance
-        self.save = save
-        _text = State(initialValue: utterance.text)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextEditor(text: $text).frame(minHeight: 180)
-                if let error { Text(error).foregroundStyle(.red) }
-            }
-            .navigationTitle("Edit transcript")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        var updated = utterance
-                        updated.text = text
-                        do { try save(updated); dismiss() }
-                        catch { self.error = error.localizedDescription }
-                    }
-                }
-            }
-        }
     }
 }
 

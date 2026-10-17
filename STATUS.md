@@ -191,3 +191,9 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - Release report: docs/release/2026-10-17-preview.md. Public installers/private source explicitly authorized; Minutes preview Google limitation accepted.
 
 - 2026-10-17 release completed: source implementation `50c89cb`/tag `minutes-v1.0.0-preview.40` pushed to private GitHub. Public installers in downloads repository; anonymous fetch/SHA/signature/notarization validation passed. Mac+iPhone40 installed; no capture/playback. See release report for exact hashes and limits.
+
+### 2026-10-17 — Find within a transcript
+- [x] Shared local occurrence matching, Unicode-safe highlight offsets, speaker-name matching and previous/next wrap navigation; callable as `minutes-cli find-transcript`.
+- [x] Shared Mac/iPhone transcript find controls, result highlights and counts, contextual full transcript, clear/no-match states; note-level Find action. Mac Cmd-F opens meeting find; library Cmd-Option-F remains separate.
+- Validation and distribution evidence recorded after build checks below. Future-feature index: `docs/research/FUTURE_FEATURES.md`; server capture and live captions remain research-only.
+- Validation: 334 model-free tests passed in the current working tree; final iOS Simulator-target build passed. CLI synthetic transcript returned three occurrences. Native Mac inspection verified highlighted matches, accessible 1-of-3/3-of-3 count, keyboard next navigation and scrolling to a distant paragraph. The subsequent delayed-focus fix compiles on both platforms; native capture became unavailable before rechecking focus. No audio capture/playback or personal library changes. This search change is not in submitted TestFlight build41.

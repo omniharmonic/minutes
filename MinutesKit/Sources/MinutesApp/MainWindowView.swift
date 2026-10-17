@@ -14,6 +14,7 @@ public struct MainWindowView: View {
     @ObservedObject public var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     @State private var meetingTab = MeetingTab.notes
+    @State private var transcriptFindRequest = 0
     @State private var search = ""
     @State private var searchPresented = false
     @FocusState private var searchFocused: Bool
@@ -124,6 +125,10 @@ public struct MainWindowView: View {
         }
         .frame(minWidth: 860, minHeight: 560)
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("MinutesFocusLibrarySearch"))) { _ in searchPresented = true; searchFocused = true }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("MinutesFindInTranscript"))) { _ in
+            guard appState.currentMeeting != nil else { return }
+            findInTranscript()
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("MinutesImportAudio"))) { _ in importing = true }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio, .movie, .plainText]) { result in
             switch result {
@@ -518,9 +523,29 @@ public struct MainWindowView: View {
                     appState.selectMeeting(id: meeting.id)
                     meetingTab = .notes
                 }, playbackAllowed: !appState.isRecording && !appState.isStartingRecording && !appState.isFinalizingRecording)
+        } else if let meeting = appState.currentMeeting, meetingTab == .transcript {
+            VStack(spacing: 0) {
+                meetingHeading(meeting)
+                    .padding(.horizontal, 24).padding(.top, 12)
+                    .frame(maxWidth: 920).frame(maxWidth: .infinity)
+                meetingContent(meeting)
+            }.id(meeting.id).background(MinutesTheme.document)
         } else if let meeting = appState.currentMeeting {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    meetingHeading(meeting)
+                    if recorderPresented { recordingWorkspace.padding(.vertical, 8) }
+                    meetingContent(meeting)
+                }.id(meeting.id).padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 60)
+                    .frame(maxWidth: 920).frame(maxWidth: .infinity, alignment: .center)
+            }.background(MinutesTheme.document)
+        } else {
+            ContentUnavailableView { Label("No Meeting Selected", systemImage: "note.text") }
+                description: { Text("Choose a meeting, or start a new recording.") }
+        }
+    }
+    private func meetingHeading(_ meeting: Meeting) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
                     Text(meeting.startedAt, format: .dateTime.month(.wide).day().year().hour().minute())
                         .font(.system(size: 12)).foregroundStyle(.secondary).frame(maxWidth: .infinity)
                     TextField("Meeting title", text: Binding(get: { appState.currentMeeting?.title ?? meeting.title }, set: { title in
@@ -531,14 +556,6 @@ public struct MainWindowView: View {
                             if let index = appState.meetings.firstIndex(where: { $0.id == latest.id }) { appState.meetings[index] = latest }
                         }
                     })).textFieldStyle(.plain).font(.system(size: 18, weight: .bold)).accessibilityLabel("Meeting title")
-                    if recorderPresented { recordingWorkspace.padding(.vertical, 8) }
-                    meetingContent(meeting)
-                }.id(meeting.id).padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 60)
-                    .frame(maxWidth: 920).frame(maxWidth: .infinity, alignment: .center)
-            }.background(MinutesTheme.document)
-        } else {
-            ContentUnavailableView { Label("No Meeting Selected", systemImage: "note.text") }
-                description: { Text("Choose a meeting, or start a new recording.") }
         }
     }
     private var recordingWorkspace: some View {
@@ -653,6 +670,11 @@ public struct MainWindowView: View {
         .minutesControlGlass(in: RoundedRectangle(cornerRadius: 16))
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 16)
     }
+    private func findInTranscript() {
+        appState.selectedSection = .meetings
+        meetingTab = .transcript
+        transcriptFindRequest += 1
+    }
     @ViewBuilder private func meetingContent(_ meeting: Meeting) -> some View {
         switch meetingTab {
         case .notes:
@@ -667,9 +689,10 @@ public struct MainWindowView: View {
                 onSaveSummary: { markdown in perform("save summary") { if var summary = appState.currentSummary { summary.markdown = markdown; try appState.store.saveSummary(summary); appState.currentSummary = summary } } }, isSummarizing: appState.isSummarizing,
                 playbackAllowed: !appState.isRecording && !appState.isStartingRecording && !appState.isFinalizingRecording,
                 usesAppleIntelligence: appState.summaryUsesAppleIntelligence,
-                onEnableAppleSummary: { appState.summaryUsesAppleIntelligence = true; Task { await appState.generateCurrentSummary() } })
+                onEnableAppleSummary: { appState.summaryUsesAppleIntelligence = true; Task { await appState.generateCurrentSummary() } },
+                onFindTranscript: findInTranscript)
         case .transcript:
-            TranscriptView(utterances: appState.currentUtterances, availableSpeakers: appState.currentClusters.map(\.label), clusters: appState.currentClusters, timestampsAvailable: meeting.platform != "transcript_import",
+            TranscriptView(utterances: appState.currentUtterances, availableSpeakers: appState.currentClusters.map(\.label), clusters: appState.currentClusters, timestampsAvailable: meeting.platform != "transcript_import", findRequest: transcriptFindRequest,
                 onSeek: { time in perform("play recording") {
                     guard !appState.isRecording && !appState.isStartingRecording && !appState.isFinalizingRecording else { return }
                     guard let path = meeting.audioPath, meeting.platform != "transcript_import" else { return }

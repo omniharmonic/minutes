@@ -16,6 +16,7 @@ public struct NotesView: View {
     @State private var showingTranscript = false
     @State private var transcriptPlaybackError: String?
     public let onSaveSummary: ((String) -> Void)?
+    public let onFindTranscript: (() -> Void)?
     public let playbackAllowed: Bool
     public let isSummarizing: Bool
     public let usesAppleIntelligence: Bool
@@ -49,7 +50,8 @@ public struct NotesView: View {
         isSummarizing: Bool = false,
         playbackAllowed: Bool = true,
         usesAppleIntelligence: Bool = false,
-        onEnableAppleSummary: (() -> Void)? = nil
+        onEnableAppleSummary: (() -> Void)? = nil,
+        onFindTranscript: (() -> Void)? = nil
     ) {
         self.meeting = meeting
         self._notesText = State(initialValue: meeting.userNotes ?? "")
@@ -68,6 +70,7 @@ public struct NotesView: View {
         self.isSummarizing = isSummarizing
         self.usesAppleIntelligence = usesAppleIntelligence
         self.onEnableAppleSummary = onEnableAppleSummary
+        self.onFindTranscript = onFindTranscript
         self._summaryDraft = State(initialValue: summary?.markdown ?? "")
     }
     
@@ -194,6 +197,13 @@ public struct NotesView: View {
                         }
                     }.padding(.top, 14)
                 } label: { Text("Transcript").font(.headline) }
+                if let onFindTranscript {
+                    Button(action: onFindTranscript) {
+                        Label("Find in transcript", systemImage: "magnifyingglass")
+                            .font(.callout).padding(.horizontal, 14).padding(.vertical, 9)
+                            .minutesControlGlass(in: Capsule(), interactive: true)
+                    }.buttonStyle(.plain)
+                }
             }
             if meeting.audioPath != nil && meeting.platform != "transcript_import" {
                 DisclosureGroup(isExpanded: $showingBookmarks) {

@@ -18,6 +18,7 @@ func printHelp() {
       minutes-cli assign <meeting-id> <cluster-label>=<name-or-email> [--learn]
       minutes-cli summarize <meeting-id>
       minutes-cli export <meeting-id> [--target parachute|markdown] [--output-dir <directory>]
+      minutes-cli find-transcript <meeting-id> <query> [--data-dir <path>]
       minutes-cli show <meeting-id>
       minutes-cli people
       minutes-cli person-meetings <person-id> [--json] [--data-dir <path>]
@@ -68,6 +69,15 @@ struct MinutesCLI {
         
         do {
             if ["help", "--help", "-h"].contains(cmd) { printHelp(); return }
+            if cmd == "find-transcript" {
+                guard args.count >= 4 else { throw NSError(domain: "Minutes.Search", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use find-transcript <meeting-id> <query> [--data-dir <path>]."]) }
+                let store = try getStore(dataDir: dataDir)
+                guard store.getMeeting(id: args[2]) != nil else { throw NSError(domain: "Minutes.Search", code: 2, userInfo: [NSLocalizedDescriptionKey: "Meeting not found."]) }
+                let matches = TranscriptSearch.matches(in: store.listUtterances(meetingId: args[2]), query: args[3])
+                // Deliberate CLI output contains offsets only, never transcript text.
+                print(String(decoding: try JSONEncoder().encode(matches), as: UTF8.self))
+                return
+            }
             if cmd == "speech-regions" {
                 guard args.count == 3 else { throw ASRError.audioUnreadable("Use speech-regions <audio-path>.") }
                 let audio = try AudioDecoder.decode(fileURL: URL(fileURLWithPath: args[2]))
