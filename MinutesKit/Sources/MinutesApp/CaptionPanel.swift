@@ -3,6 +3,7 @@ import AppKit
 import SwiftUI
 import MinutesCore
 import MinutesSpeech
+import MinutesSpeakerID
 import MinutesUI
 
 @MainActor final class CaptionPanelModel: ObservableObject {
@@ -12,6 +13,16 @@ import MinutesUI
     @Published var following = true
     @Published var recording = false
     @Published var demo = false
+    @Published var speakerGroups: [String: String] = [:]
+    @Published var manualNames: [String: String] = [:]
+    @Published var people: [Person] = []
+    @Published var invitees: [Person] = []
+    func nameSpeaker(_ group: String, name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        manualNames[group] = String(name.prefix(120))
+        for line in history.lines where speakerGroups[line.id] == group { history.identify(id: line.id, name: manualNames[group]!) }
+    }
 }
 
 private final class CaptionPanel: NSPanel {
@@ -22,6 +33,8 @@ private final class CaptionPanel: NSPanel {
 @MainActor final class CaptionPanelController {
     let model = CaptionPanelModel()
     var savedVoices: () -> ([Person], [Voiceprint]) = { ([], []) }
+    var meetingPeople: () -> [Person] = { [] }
+    private var anonymousSpeakers = LiveSpeakerClusters()
     private let voiceMatcher = LiveVoiceMatcher()
     private var pendingNames: [String: String] = [:]
     private var identityTask: Task<Void, Never>?
@@ -42,10 +55,11 @@ private final class CaptionPanel: NSPanel {
         guard enabled else { return }
         generation = UUID(); identityTask?.cancel(); identityTask = nil; demoTask?.cancel(); model.demo = false
         pendingNames.removeAll(); identityQueue.removeAll()
+        anonymousSpeakers = LiveSpeakerClusters(); model.speakerGroups = [:]; model.manualNames = [:]
+        model.people = savedVoices().0; model.invitees = meetingPeople()
         model.history = LiveCaptionHistory(); model.recording = true; model.following = true
         model.status = "Listening locally · preview may change"
         do {
-            let (_, voices) = savedVoices()
             let token = generation
             let identify: LiveCaptionRecognizer.AudioWindow = { [weak self] id, samples, rate in
                 guard let self else { return }
@@ -67,12 +81,19 @@ private final class CaptionPanel: NSPanel {
                             guard !Task.isCancelled, self.generation == token else { return }
                             // Never apply an identity removed while inference was running.
                             let (latestPeople, latestVoices) = self.savedVoices()
-                            guard let personID = result.personID,
-                                  let name = latestPeople.first(where: { $0.id == personID })?.displayName,
-                                  currentVoices.filter({ $0.personId == personID }).map(\.id).sorted() == latestVoices.filter({ $0.personId == personID }).map(\.id).sorted() else { continue }
+                            self.model.people = latestPeople; self.model.invitees = self.meetingPeople()
+                            guard let evidence = result.speakerEvidence,
+                                  let group = self.anonymousSpeakers.label(for: evidence) else { continue }
+                            if self.model.speakerGroups.count >= 200 { self.model.speakerGroups.removeAll() }
+                            self.model.speakerGroups[window.id] = group
+                            var label = group
+                            if let personID = result.personID,
+                               currentVoices.filter({ $0.personId == personID }).map(\.id).sorted() == latestVoices.filter({ $0.personId == personID }).map(\.id).sorted(),
+                               let person = latestPeople.first(where: { $0.id == personID }) { label = person.displayName }
+                            label = self.model.manualNames[group] ?? label
                             if self.pendingNames.count >= 200 { self.pendingNames.removeAll() }
-                            self.pendingNames[window.id] = name
-                            self.model.history.identify(id: window.id, name: name)
+                            self.pendingNames[window.id] = label
+                            self.model.history.identify(id: window.id, name: label)
                         } catch {
                             guard !Task.isCancelled, self.generation == token else { return }
                             self.model.status = "Live voice matching unavailable · captions and recording continue"
@@ -80,10 +101,12 @@ private final class CaptionPanel: NSPanel {
                     }
                 }
             }
-            try recognizer.start(audioWindow: voices.isEmpty ? nil : identify, update: { [weak self] id, text, source, final, order in
+            try recognizer.start(audioWindow: identify, update: { [weak self] id, text, source, final, order in
                 guard let self else { return }
                 self.model.history.update(id: id, text: text, source: source, isFinal: final, order: order)
-                if let name = self.pendingNames[id] { self.model.history.identify(id: id, name: name) }
+                if let group = self.model.speakerGroups[id], let name = self.model.manualNames[group] {
+                    self.model.history.identify(id: id, name: name)
+                } else if let name = self.pendingNames[id] { self.model.history.identify(id: id, name: name) }
             }, notice: { [weak self] message in if self?.model.recording == true { self?.model.status = message } })
         } catch { model.recording = false; model.status = "Captions unavailable: \(error.localizedDescription)" }
         present()
@@ -197,6 +220,8 @@ private struct CaptionPanelView: View {
     let move: (NSScreen) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var editingSpeaker: String?
+    @State private var enteredName = ""
     @Namespace private var glass
 
     var body: some View {
@@ -213,6 +238,39 @@ private struct CaptionPanelView: View {
         .padding(8)
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: model.expanded)
         .onExitCommand { model.expanded = false; resize() }
+        .popover(isPresented: Binding(get: { editingSpeaker != nil }, set: { if !$0 { editingSpeaker = nil } })) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(editingSpeaker ?? "Speaker").font(.headline)
+                Text("Live label only. Confirm the final speakers in the meeting’s People review. This does not remember a voice.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Type a name", text: $enteredName).textFieldStyle(.roundedBorder)
+                Button("Use this name") {
+                    if let group = editingSpeaker { model.nameSpeaker(group, name: enteredName) }
+                    editingSpeaker = nil
+                }.disabled(enteredName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                List {
+                    Section("Calendar invitees") {
+                        ForEach(model.invitees) { person in livePersonRow(person) }
+                        if model.invitees.isEmpty { Text("No linked calendar invitees").foregroundStyle(.secondary) }
+                    }
+                    Section("Other people") {
+                        ForEach(model.people.filter { person in !model.invitees.contains { $0.id == person.id } }) { person in livePersonRow(person) }
+                    }
+                }.listStyle(.plain)
+                Button("Cancel") { editingSpeaker = nil }
+            }.padding(20).frame(width: 340, height: 420)
+        }
+    }
+    private func livePersonRow(_ person: Person) -> some View {
+        Button {
+            if let group = editingSpeaker { model.nameSpeaker(group, name: person.displayName) }
+            editingSpeaker = nil
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(person.displayName)
+                if let email = person.emails.first { Text(email).font(.caption).foregroundStyle(.secondary) }
+            }
+        }.buttonStyle(.plain)
     }
     private var content: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -247,7 +305,18 @@ private struct CaptionPanelView: View {
                             }
                             ForEach(model.history.lines) { line in
                                 VStack(alignment: .leading, spacing: 5) {
-                                    Text(line.speakerName.map { "\($0) · likely · \(line.source)" } ?? line.source).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                    if let group = model.speakerGroups[line.id] {
+                                        Button {
+                                            enteredName = model.manualNames[group] ?? ""
+                                            editingSpeaker = group
+                                        } label: {
+                                            Label((line.speakerName ?? group) + (model.manualNames[group] == nil && line.speakerName != nil && line.speakerName != group ? " · likely" : ""), systemImage: "person.crop.circle.badge.questionmark")
+                                                .font(.caption.weight(.medium)).padding(.horizontal, 10).padding(.vertical, 6)
+                                                .minutesControlGlass(in: Capsule(), interactive: true)
+                                        }.buttonStyle(.plain).help("Name this provisional speaker")
+                                    } else {
+                                        Text("Speaker not resolved").font(.caption).foregroundStyle(.secondary)
+                                    }
                                     Text(line.text).font(.system(size: 20, weight: .medium)).lineSpacing(5)
                                         .foregroundStyle(line.isFinal ? .primary : .secondary)
                                         .textSelection(.enabled)

@@ -25,3 +25,18 @@ No identity thresholds were lowered: batch matching retains 0.88; live matching 
 - Mac build49 Developer ID signed, notarized, stapled and installed. Installed executable matches the package and strict code-signature verification passes.
 - After app restart, the actual native caption panel silently processed the untagged recording: three owner labels visible, five recognition sessions, zero retries, zero dropped batches. No personal transcript content was printed or captured into evidence.
 - Preview closed afterward; normal library remained at 256 meetings and 46 voiceprints. All testing was local and silent; no microphone or playback.
+
+## Follow-up condition matrix (build50 work)
+
+Six local transformations of the independent, untagged owner recording were tested against unchanged profiles. No transformed sample was enrolled. White noise SNR is relative to whole-file RMS, not speech-only RMS; the telephone filter is a 300–3400 Hz band limit, not an actual Bluetooth codec/device test.
+
+| Condition | Batch owner speech / detected speech | Live owner windows / all windows | Wrong-person assignments |
+|---|---:|---:|---:|
+| Original | 35.7 / 40.0 sec | 3 / 5 | 0 |
+| −18 dB level | 36.8 / 41.1 sec | 3 / 5 | 0 |
+| +6 dB level | 35.7 / 40.0 sec | 3 / 5 | 0 |
+| Telephone-like band limit | 32.5 / 36.8 sec | 0 / 5 | 0 |
+| White noise, 20 dB SNR | 0 / 39.4 sec | 0 / 5 | 0 |
+| White noise, 10 dB SNR | 0 / 38.6 sec | 0 / 5 | 0 |
+
+An FFmpeg spectral-denoising experiment (`afftdn=nr=20:tn=1`) did not recover noise matches and lost the telephone batch match. It is not shipped. No thresholds were lowered. This fails the broad reliability acceptance gate despite safe abstention; noise-robust embedding/preprocessing and representative multi-condition enrollment require further held-out positive and negative evaluation. Real AirPods/room/distance/device and multi-human recordings remain untested conditions. No claim of consistent cross-condition reliability is warranted.

@@ -108,6 +108,8 @@ struct MinutesCLI {
                 let matcher = LiveVoiceMatcher()
                 var windows = 0, named = 0, expectedMatches = 0, unexpectedMatches = 0
                 var reasons: [String: Int] = [:]
+                var groups = LiveSpeakerClusters()
+                var groupLabels = Set<String>()
                 let expectedIndex = args.firstIndex(of: "--expect-person")
                 let expectedID = expectedIndex.flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
                 let expectedName = store.listPeople().first { $0.id == expectedID }?.displayName
@@ -117,6 +119,7 @@ struct MinutesCLI {
                     let evaluation = try await matcher.evaluate(samples: slice, rate: 16000,
                         people: store.listPeople(), voiceprints: store.listVoiceprints())
                     reasons[evaluation.reason, default: 0] += 1
+                    if let evidence = evaluation.speakerEvidence, let label = groups.label(for: evidence) { groupLabels.insert(label) }
                     windows += 1
                     if evaluation.personID != nil {
                         named += 1
@@ -125,6 +128,7 @@ struct MinutesCLI {
                         }
                     }
                 }
+                print("Anonymous provisional groups: \(groupLabels.count)")
                 print("Caption voice windows: \(windows); provisional matches: \(named). No profiles changed.")
                 print("Decisions: " + reasons.keys.sorted().map { "\($0)=\(reasons[$0]!)" }.joined(separator: ", "))
                 if expectedID != nil { print("Expected-person matches: \(expectedMatches); other-person matches: \(unexpectedMatches); unnamed: \(windows - named).") }

@@ -244,3 +244,12 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] Replaced silent busy-inference drops with bounded FIFO; refresh profiles for pending work; stable identity IDs; await queued analysis at caption finish.
 - [x] 352 tests, iOS compatibility build, signed/notarized Mac49 install verified.
 - [~] Robust cross-condition real-human accuracy remains an open acceptance gate; thresholds unchanged, no promise of perfect identification. See `docs/release/2026-10-17-voice-reuse.md`.
+
+
+## 2026-10-17 provisional speakers / build50
+
+- [x] Session-local anonymous speaker grouping and clickable live naming; invitees and other people separated; explicit session-only scope and no automatic enrollment.
+- [x] Saved review separates calendar invitees, other saved people and manual additions.
+- [x] 353 tests, iOS simulator compile, signed/notarized installed Mac50. Native silent 60-second fixture: two groups, manual naming carried to a later matching window, zero retries/drops.
+- [~] Six-condition held-out owner matrix and matching synthetic-negative matrix completed. Gain changes pass; noise misses both paths and telephone-like audio misses live naming. Zero wrong-person matches in these limited samples. Spectral denoising failed and is not shipped. Broad recognition reliability is NOT established.
+- Reports: `docs/release/2026-10-17-speaker-controls.md`, `docs/release/2026-10-17-voice-reuse.md`; repeatable silent CLI runner: `scripts/voice-condition-audit.py`.

@@ -73,6 +73,7 @@ public struct ReviewSpeakersView: View {
     @State private var newPersonEmail: String = ""
     @State private var choosingPerson = false
     @State private var personSearch = ""
+    @State private var addedPeople: [Person] = []
     
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -219,9 +220,9 @@ public struct ReviewSpeakersView: View {
                         if !newPersonName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let cluster = activeCluster {
                             let name = newPersonName.trimmingCharacters(in: .whitespacesAndNewlines)
                             let email = newPersonEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let knownPeople = attendees + availablePeople
+                            let knownPeople = attendees + availablePeople + addedPeople
                             let p = SpeakerReviewPresentation.personForConfirmation(name: name, email: email, knownPeople: knownPeople)
-                            if !knownPeople.contains(where: { $0.id == p.id }) { attendees.append(p) }
+                            if !knownPeople.contains(where: { $0.id == p.id }) { addedPeople.append(p) }
                             confirmCluster(cluster, asPerson: p)
                             isCreatingPerson = false
                             newPersonName = ""
@@ -414,28 +415,18 @@ public struct ReviewSpeakersView: View {
                     }.padding(14)
                     Divider()
                     List {
-                        ForEach(filteredPeople) { person in
-                            Button {
-                                choosingPerson = false
-                                confirmCluster(cluster, asPerson: person)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "person.crop.circle").font(.title3).foregroundStyle(.secondary)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(person.displayName).font(.callout.weight(.medium))
-                                        if let email = person.emails.first {
-                                            Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                        }
-                                        if attendees.contains(where: { $0.id == person.id }) {
-                                            Text("Linked to this meeting").font(.caption).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Spacer(minLength: 0)
-                                    if cluster.personId == person.id {
-                                        Image(systemName: "checkmark").foregroundStyle(.secondary)
-                                    }
-                                }.padding(.vertical, 4).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
+                        Section("Calendar invitees") {
+                            if filteredPeople.filter({ person in attendees.contains { $0.id == person.id } }).isEmpty {
+                                Text("No matching invitees").foregroundStyle(.secondary)
+                            }
+                            ForEach(filteredPeople.filter { person in attendees.contains { $0.id == person.id } }) { person in
+                                personRow(person, cluster: cluster)
+                            }
+                        }
+                        Section("Other people") {
+                            ForEach(filteredPeople.filter { person in !attendees.contains { $0.id == person.id } }) { person in
+                                personRow(person, cluster: cluster)
+                            }
                         }
                     }.listStyle(.plain)
                         .overlay {
@@ -450,7 +441,7 @@ public struct ReviewSpeakersView: View {
                         newPersonName = personSearch.trimmingCharacters(in: .whitespacesAndNewlines)
                         isCreatingPerson = true
                     } label: {
-                        Label("Add someone…", systemImage: "person.badge.plus")
+                        Label("Add person not on the invitation…", systemImage: "person.badge.plus")
                             .font(.callout).frame(maxWidth: .infinity, alignment: .leading).padding(14)
                     }.buttonStyle(.plain)
                 }.frame(idealWidth: 320, maxWidth: 360, minHeight: 360)
@@ -459,10 +450,34 @@ public struct ReviewSpeakersView: View {
             }
     }
 
+    private func personRow(_ person: Person, cluster: SpeakerCluster) -> some View {
+                            Button {
+                                choosingPerson = false
+                                confirmCluster(cluster, asPerson: person)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "person.crop.circle").font(.title3).foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(person.displayName).font(.callout.weight(.medium))
+                                        if let email = person.emails.first {
+                                            Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                        }
+                                        if attendees.contains(where: { $0.id == person.id }) {
+                                            Text("Calendar invitee").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                    if cluster.personId == person.id {
+                                        Image(systemName: "checkmark").foregroundStyle(.secondary)
+                                    }
+                                }.padding(.vertical, 4).contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+    }
+
     private var filteredPeople: [Person] {
         var seen = Set<String>()
         let sortedAttendees = attendees.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
-        let sortedPeople = availablePeople.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        let sortedPeople = (availablePeople + addedPeople).sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         let people = (sortedAttendees + sortedPeople).filter { seen.insert($0.id).inserted }
         let query = personSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return people }
@@ -545,9 +560,9 @@ public struct ReviewSpeakersView: View {
 
     private func suggestedPerson(for cluster: SpeakerCluster) -> Person? {
         if let personID = cluster.personId {
-            return (attendees + availablePeople).first(where: { $0.id == personID })
+            return (attendees + availablePeople + addedPeople).first(where: { $0.id == personID })
         }
-        return (attendees + availablePeople).first(where: { $0.displayName == cluster.label })
+        return (attendees + availablePeople + addedPeople).first(where: { $0.displayName == cluster.label })
     }
     
     private func confirmCluster(_ cluster: SpeakerCluster, asPerson person: Person) {

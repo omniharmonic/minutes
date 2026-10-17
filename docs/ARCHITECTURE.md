@@ -318,3 +318,6 @@ Caption stability (Mac build48): recognition remains in bounded ten-second windo
 
 
 Live identity scheduling (Mac build49): one inference runs at a time with a four-window owned-PCM FIFO. Busy inference no longer silently discards the next window; bounded overflow is communicated. Each pending request refreshes persisted profiles, and results carry a stable person ID and are discarded if its profile set changes during inference. End-of-preview drains the bounded identity task; close/restart invalidates work. A fresh owner-confirmed baseline enabled batch and native live reuse in an independent owner recording; short/ambiguous speech still abstains. No threshold relaxation or automatic enrollment was introduced.
+
+
+Build50 separates anonymous diarization from remembered identity in live preview. Valid consistent single-speaker evidence can enter a bounded session-local anonymous registry even with no saved profiles; grouping uses conservative similarity/margin gates, never person identity. Clickable live labels affect that provisional group only and are not enrolled or persisted to final transcripts. Saved-meeting review remains the authoritative identity reconciliation and enrollment flow. The controlled condition matrix exposed weak noisy/band-limited live recall; no denoising or threshold relaxation was shipped.

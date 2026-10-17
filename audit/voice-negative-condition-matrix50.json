@@ -1,0 +1,74 @@
+{
+  "gain6db": {
+    "voice-audit-file": [
+      "Batch audit: 3 clusters; expected-person matches: 0; other-person matches: 0; unnamed: 3.",
+      "Expected-person speech seconds: 0.0; detected speech seconds: 62.0. No meetings or profiles changed."
+    ],
+    "caption-voice-file": [
+      "Anonymous provisional groups: 4",
+      "Caption voice windows: 11; provisional matches: 0. No profiles changed.",
+      "Decisions: insufficient-speech=1, mixed-or-undetected-speech=5, weak-or-ambiguous-match=5",
+      "Expected-person matches: 0; other-person matches: 0; unnamed: 11."
+    ]
+  },
+  "noise10db": {
+    "voice-audit-file": [
+      "Batch audit: 3 clusters; expected-person matches: 0; other-person matches: 0; unnamed: 3.",
+      "Expected-person speech seconds: 0.0; detected speech seconds: 67.0. No meetings or profiles changed."
+    ],
+    "caption-voice-file": [
+      "Anonymous provisional groups: 2",
+      "Caption voice windows: 11; provisional matches: 0. No profiles changed.",
+      "Decisions: mixed-or-undetected-speech=6, weak-or-ambiguous-match=5",
+      "Expected-person matches: 0; other-person matches: 0; unnamed: 11."
+    ]
+  },
+  "noise20db": {
+    "voice-audit-file": [
+      "Batch audit: 2 clusters; expected-person matches: 0; other-person matches: 0; unnamed: 2.",
+      "Expected-person speech seconds: 0.0; detected speech seconds: 61.9. No meetings or profiles changed."
+    ],
+    "caption-voice-file": [
+      "Anonymous provisional groups: 2",
+      "Caption voice windows: 11; provisional matches: 0. No profiles changed.",
+      "Decisions: insufficient-speech=1, mixed-or-undetected-speech=5, weak-or-ambiguous-match=5",
+      "Expected-person matches: 0; other-person matches: 0; unnamed: 11."
+    ]
+  },
+  "original": {
+    "voice-audit-file": [
+      "Batch audit: 3 clusters; expected-person matches: 0; other-person matches: 0; unnamed: 3.",
+      "Expected-person speech seconds: 0.0; detected speech seconds: 62.2. No meetings or profiles changed."
+    ],
+    "caption-voice-file": [
+      "Anonymous provisional groups: 4",
+      "Caption voice windows: 11; provisional matches: 0. No profiles changed.",
+      "Decisions: insufficient-speech=1, mixed-or-undetected-speech=5, weak-or-ambiguous-match=5",
+      "Expected-person matches: 0; other-person matches: 0; unnamed: 11."
+    ]
+  },
+  "quiet18db": {
+    "voice-audit-file": [
+      "Batch audit: 3 clusters; expected-person matches: 0; other-person matches: 0; unnamed: 3.",
+      "Expected-person speech seconds: 0.0; detected speech seconds: 62.2. No meetings or profiles changed."
+    ],
+    "caption-voice-file": [
+      "Anonymous provisional groups: 4",
+      "Caption voice windows: 11; provisional matches: 0. No profiles changed.",
+      "Decisions: insufficient-speech=1, mixed-or-undetected-speech=5, weak-or-ambiguous-match=5",
+      "Expected-person matches: 0; other-person matches: 0; unnamed: 11."
+    ]
+  },
+  "telephone": {
+    "voice-audit-file": [
+      "Batch audit: 3 clusters; expected-person matches: 0; other-person matches: 0; unnamed: 3.",
+      "Expected-person speech seconds: 0.0; detected speech seconds: 61.1. No meetings or profiles changed."
+    ],
+    "caption-voice-file": [
+      "Anonymous provisional groups: 4",
+      "Caption voice windows: 11; provisional matches: 0. No profiles changed.",
+      "Decisions: inconsistent-voice=1, insufficient-speech=1, mixed-or-undetected-speech=5, weak-or-ambiguous-match=4",
+      "Expected-person matches: 0; other-person matches: 0; unnamed: 11."
+    ]
+  }
+}

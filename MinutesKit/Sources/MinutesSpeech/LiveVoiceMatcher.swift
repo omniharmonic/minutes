@@ -6,10 +6,11 @@ import MinutesSpeakerID
 /// Disposable caption attribution; never writes profiles, people, or final transcripts.
 public actor LiveVoiceMatcher {
     public struct Evaluation: Sendable {
+        public let speakerEvidence: [Float]?
         public let personID: String?
         public let name: String?
         public let reason: String
-        public init(personID: String? = nil, name: String? = nil, reason: String) { self.personID = personID; self.name = name; self.reason = reason }
+        public init(personID: String? = nil, name: String? = nil, reason: String, speakerEvidence: [Float]? = nil) { self.personID = personID; self.name = name; self.reason = reason; self.speakerEvidence = speakerEvidence }
     }
     private let backend: any SpeakerDiarizationBackend
     public init(backend: any SpeakerDiarizationBackend = FluidDiarizationBackend()) { self.backend = backend }
@@ -20,7 +21,7 @@ public actor LiveVoiceMatcher {
     public func evaluate(samples: [Float], rate: Double, people: [Person], voiceprints: [Voiceprint]) async throws -> Evaluation {
         guard rate.isFinite, rate >= 8_000, rate <= 192_000,
               samples.count >= Int(rate * 5), samples.count <= Int(rate * 15),
-              samples.allSatisfy(\.isFinite), !voiceprints.isEmpty else { return Evaluation(reason: "insufficient-audio-or-profiles") }
+              samples.allSatisfy(\.isFinite) else { return Evaluation(reason: "insufficient-audio-or-profiles") }
         let mono = try Self.resample(samples, rate: rate)
         let segments = try await backend.diarize(samples: mono, config: DiarizationConfig())
         try Task.checkCancellation()
@@ -44,8 +45,8 @@ public actor LiveVoiceMatcher {
             allowAutomaticAssignment: true, minimumMargin: 0.12)
             .match(clusters: [cluster], people: people, voiceprints: voiceprints, attendeePersonIds: [])
         guard let match = result.first, match.assignment == "auto",
-              let name = match.personName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Evaluation(reason: "weak-or-ambiguous-match") }
-        return Evaluation(personID: match.personId, name: name, reason: "matched")
+              let name = match.personName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Evaluation(reason: "weak-or-ambiguous-match", speakerEvidence: centroid) }
+        return Evaluation(personID: match.personId, name: name, reason: "matched", speakerEvidence: centroid)
     }
 
     private static func resample(_ samples: [Float], rate: Double) throws -> [Float] {

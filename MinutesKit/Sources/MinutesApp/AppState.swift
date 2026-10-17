@@ -46,6 +46,7 @@ public final class AppState: ObservableObject {
             guard let self else { return ([], []) }
             return (self.store.listPeople(), self.store.listVoiceprints())
         }
+        panel.meetingPeople = { [weak self] in self?.currentAttendees ?? [] }
         return panel
     }()
     #endif
