@@ -802,15 +802,6 @@ public final class AppState: ObservableObject {
             return
         }
         do {
-            if let placeholderTitle, let title = MeetingTitleGenerator.suggest(from: utterances) {
-                try store.withImmediateTransaction {
-                    guard var latest = store.getMeeting(id: meetingID) else { return }
-                    if latest.title == placeholderTitle {
-                        latest.title = title
-                        try store.saveMeeting(latest)
-                    }
-                }
-            }
             guard let meeting = store.getMeeting(id: meetingID) else {
                 statusMessage = "The meeting was removed. Saved audio was preserved."
                 return
@@ -829,17 +820,19 @@ public final class AppState: ObservableObject {
             statusMessage = apple ? "Preparing notes with Apple's on-device model…" : "Preparing notes from the transcript…"
             // A failed AI request must never be substituted with excerpts and
             // stored as if the requested summary had completed.
-            let generated = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
+            var generated = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
             var saved = false
             try store.withImmediateTransaction {
                 guard let latest = store.getMeeting(id: meetingID),
                       latest.title == meeting.title, latest.userNotes == meeting.userNotes,
                       try summarySnapshot(store.getSummary(meetingId: meetingID)) == baseline else { return }
+                try applyAutomaticTitle(to: &generated, meeting: meeting, utterances: utterances, placeholderTitle: placeholderTitle)
                 try store.saveSummary(generated)
                 saved = true
             }
             if saved {
-                if currentMeeting?.id == meetingID { currentSummary = generated }
+                meetings = store.listMeetings()
+                if currentMeeting?.id == meetingID { currentSummary = generated; currentMeeting = store.getMeeting(id: meetingID) }
                 if Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes) {
                     statusMessage = generated.overview
                 } else {
@@ -948,6 +941,37 @@ public final class AppState: ObservableObject {
         return updated
     }
 
+    /// Runs inside the summary transaction, before exports. Only untouched
+    /// recording placeholders are eligible; calendar and manual titles stay put.
+    private func applyAutomaticTitle(to summary: inout MeetingSummary, meeting: Meeting,
+                                     utterances: [Utterance], placeholderTitle: String?) throws {
+        guard var latest = store.getMeeting(id: meeting.id), latest.title == meeting.title else { return }
+        let value = latest.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isPlaceholder = value.isEmpty || value == "Untitled" || value == "New Meeting" ||
+            value.range(of: #"^Meeting \(.+\d{1,2}:\d{2}.*\)$"#, options: .regularExpression) != nil ||
+            value.range(of: #"^Meeting on .+\d{1,2}:\d{2}.*$"#, options: .regularExpression) != nil || (placeholderTitle != nil && value == placeholderTitle)
+        guard isPlaceholder, let topic = MeetingTitleGenerator.suggest(from: utterances) else { return }
+        let base = topic.prefix(1).uppercased() + topic.dropFirst()
+        let used = Set(store.listMeetings().filter { $0.id != meeting.id }.map { $0.title.lowercased() })
+        var candidate = base
+        if used.contains(candidate.lowercased()) {
+            let date = DateFormatter.localizedString(from: latest.startedAt, dateStyle: .medium, timeStyle: .short)
+            candidate = "\(base) — \(date)"
+            var ordinal = 2
+            while used.contains(candidate.lowercased()) {
+                candidate = "\(base) — \(date) (\(ordinal))"
+                ordinal += 1
+            }
+        }
+        latest.title = candidate
+        try store.saveMeeting(latest)
+        let oldHeading = "# \(summary.title)\n"
+        if summary.markdown.hasPrefix(oldHeading) {
+            summary.markdown = "# \(candidate)\n" + summary.markdown.dropFirst(oldHeading.count)
+        }
+        summary.title = candidate
+    }
+
     private func summarySnapshot(_ value: MeetingSummary?) throws -> Data? {
         guard let value else { return nil }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
@@ -965,14 +989,16 @@ public final class AppState: ObservableObject {
         statusMessage = apple ? "Generating notes with Apple's on-device model…" : "Extracting notes from the transcript…"
         do {
             let baseline = try summarySnapshot(store.getSummary(meetingId: meeting.id))
-            let summary = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
+            var summary = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
             try store.withImmediateTransaction {
                 guard try summarySnapshot(store.getSummary(meetingId: meeting.id)) == baseline else {
                     throw NSError(domain: "MinutesApp", code: 409, userInfo: [NSLocalizedDescriptionKey: "The summary changed while generation was running. Your edits were preserved; review them before generating again."])
                 }
+                try applyAutomaticTitle(to: &summary, meeting: meeting, utterances: utterances, placeholderTitle: nil)
                 try store.saveSummary(summary)
             }
-            if currentMeeting?.id == meeting.id { currentSummary = summary }
+            meetings = store.listMeetings()
+            if currentMeeting?.id == meeting.id { currentSummary = summary; currentMeeting = store.getMeeting(id: meeting.id) }
             await automaticallyFileMeeting(id: meeting.id)
             statusMessage = Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes)
                 ? summary.overview

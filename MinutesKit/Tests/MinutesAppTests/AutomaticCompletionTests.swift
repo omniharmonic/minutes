@@ -91,3 +91,41 @@ import MinutesSummarize
         #expect(membership.source == .manual)
     }
 }
+
+extension AutomaticCompletionTests {
+    @Test func regeneratingSummaryRenamesTimestampNotesAndAvoidsDuplicateTitles() async throws {
+        let store = try MinutesStore(dbPath: ":memory:")
+        let prefs = UserDefaults(suiteName: "title-retry-" + UUID().uuidString)!
+        let state = try AppState(store: store, preferences: prefs, summarizeMeeting: { m, _, _, _, _ in
+            MeetingSummary(meetingId: m.id, title: m.title, overview: "Telescope calibration", markdown: "# \(m.title)\n\nCalibration decisions")
+        })
+        var titles: [String] = []
+        for id in ["one", "two"] {
+            let meeting = Meeting(id: id, title: "Meeting (10/17/26, 1:00 PM)", startedAt: Date(), status: "needs_review")
+            try store.saveMeeting(meeting)
+            try store.saveUtterances([Utterance(id: 1, meetingId: id, clusterId: "", speakerName: "Speaker", start: 0, end: 5, text: "Telescope calibration requires lens inspection. Telescope calibration starts Tuesday.")])
+            state.selectMeeting(id: id)
+            await state.generateCurrentSummary()
+            let renamed = try #require(store.getMeeting(id: id))
+            #expect(!renamed.title.hasPrefix("Meeting ("))
+            #expect(renamed.title.localizedCaseInsensitiveContains("telescope"))
+            #expect(state.currentMeeting?.title == renamed.title)
+            #expect(store.getSummary(meetingId: id)?.title == renamed.title)
+            #expect(store.getSummary(meetingId: id)?.markdown.hasPrefix("# \(renamed.title)\n") == true)
+            titles.append(renamed.title)
+        }
+        #expect(titles[0] != titles[1])
+    }
+
+    @Test(arguments: ["My telescope plans", "Meeting (Product strategy)"])
+    func summaryRetryPreservesCustomTitle(title: String) async throws {
+        let (state, store, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(id: "manual-title", title: title, startedAt: Date(), status: "needs_review")
+        try store.saveMeeting(meeting)
+        try store.saveUtterances([Utterance(id: 1, meetingId: meeting.id, clusterId: "", speakerName: "Speaker", start: 0, end: 5, text: "Telescope calibration needs lens inspection.")])
+        state.selectMeeting(id: meeting.id)
+        await state.generateCurrentSummary()
+        #expect(store.getMeeting(id: meeting.id)?.title == meeting.title)
+    }
+}

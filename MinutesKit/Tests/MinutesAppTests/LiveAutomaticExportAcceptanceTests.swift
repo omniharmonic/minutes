@@ -25,7 +25,7 @@ import MinutesExport
         state.autoExportPrism = true
         let input = root.appendingPathComponent("Synthetic observatory meeting.txt")
         try "Maya will inspect the telescope lens on Tuesday. Leo will compare the star charts by Thursday. We decided to postpone the public demonstration until the safety checklist is complete. The equipment budget is three hundred dollars.".write(to: input, atomically: true, encoding: .utf8)
-        let meeting = try await state.importMedia(from: input, isTranscript: true)
+        let meeting = try await state.importMedia(from: input, title: "Meeting (10/17/26, 4:00 PM)", isTranscript: true)
         await state.generateCurrentSummary()
         #expect(store.getSummary(meetingId: meeting.id) != nil)
         let delivery = try #require(store.listOutboxItems(meetingId: meeting.id).first)
@@ -36,6 +36,9 @@ import MinutesExport
         let payload = try JSONDecoder().decode(PrismMeetingPayload.self, from: Data(delivery.payloadJson.utf8))
         #expect(payload.destinationDirectory == "Minutes-Test/AutomaticSummary")
         #expect(!payload.summary.markdown.isEmpty && !payload.utterances.isEmpty)
+        #expect(payload.title != meeting.title)
+        #expect(payload.title == store.getMeeting(id: meeting.id)?.title)
+        #expect(payload.summary.markdown.hasPrefix("# \(payload.title)\n"))
         let priorID = delivery.id
         await state.syncPrismOutbox()
         #expect(store.listOutboxItems(meetingId: meeting.id).count == 1)
