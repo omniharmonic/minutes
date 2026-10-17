@@ -214,8 +214,31 @@ public final class MinutesStore: @unchecked Sendable {
         }
         self.db = handle
         try migrate()
+        if dbPath != ":memory:" {
+            try relocateManagedAudioPaths(to: URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("audio", isDirectory: true))
+        }
     }
     
+    /// iOS may change the sandbox UUID during an update or restore. Repair
+    /// database references only; never move, rewrite, or delete recording bytes.
+    /// External files and missing managed files are deliberately left untouched.
+    public func relocateManagedAudioPaths(to directory: URL) throws {
+        try withImmediateTransaction {
+            for var meeting in listMeetings() + listMeetings(inTrash: true) {
+                guard let path = meeting.audioPath,
+                      !FileManager.default.fileExists(atPath: path),
+                      let marker = path.range(of: "/Library/Application Support/Minutes/audio/", options: .backwards) else { continue }
+                let filename = String(path[marker.upperBound...])
+                guard !filename.isEmpty, !filename.contains("/"), filename != ".", filename != ".." else { continue }
+                let candidate = directory.appendingPathComponent(filename)
+                let values = try? candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
+                meeting.audioPath = candidate.path
+                try saveMeeting(meeting)
+            }
+        }
+    }
+
     deinit {
         if let db = db {
             sqlite3_close(db)

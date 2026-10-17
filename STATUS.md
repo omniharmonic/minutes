@@ -261,3 +261,5 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] Silent full-file Mac verification: 589 words saved, 152 recovered by retries, no remaining detected-speech gaps or exact duplicate word/timestamp entries.
 - [x] 357 tests pass; signed iOS46 installed in place; original audio can be shared from a failed meeting. Mac supports Finder Open With import via existing copy-first pipeline.
 - [~] iPhone regeneration verification awaits owner unlocking/starting the saved recording; no claim of word-for-word accuracy. See `docs/release/2026-10-17-long-recording-recovery.md`.
+
+- 2026-10-17 follow-up: iOS47 repairs stale managed audio paths after sandbox relocation on update/restore; original file stays untouched. 358 tests pass, build installed, owner asked to reopen and regenerate (device locked). Mac52 installed with single status text and no redundant Details disclosure.

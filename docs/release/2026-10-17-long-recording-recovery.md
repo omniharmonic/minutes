@@ -17,3 +17,8 @@ Silent Mac processing of the complete 401.26375-second working copy produced 437
 ## Pending gate
 On-device regeneration of the important recording in iPhone build 46; the phone was locked when launch was attempted, and the owner was asked to unlock and regenerate. A coverage check is not proof of word-for-word accuracy. The Mac build is Developer ID signed locally, not notarized/published in this pass.
 
+
+## iPhone follow-up: sandbox relocation (build 47)
+The owner reported “audio cannot be found at that path” in build 46. The preserved file remained present, but the stored absolute path referenced the pre-update iOS container. Library opening now repairs missing managed audio references against the current library's audio directory, only when the same regular filename exists. It never moves, rewrites, or deletes audio and leaves external/missing references untouched. This also supports restored libraries and the CLI. A reopen regression verifies unchanged bytes and correct exclusions. All 358 tests pass. Signed build 47 installed; device launch was blocked by the phone being locked, so native regeneration verification is still pending.
+
+Mac build 52 separately removes the redundant Details disclosure from the processing status panel: one status message, with a second model-installation message only if different. Signed build installed locally.

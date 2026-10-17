@@ -26,7 +26,6 @@ public struct MainWindowView: View {
     @State private var upcomingSelection: String?
     @State private var connectingAppleCalendar = false
     @State private var personSelection: String?
-    @State private var statusDetailsExpanded = false
     @State private var confirmingReprocess = false
     @State private var reprocessMeetingID: String?
     @State private var creatingFolder = false
@@ -641,26 +640,19 @@ public struct MainWindowView: View {
                     Button("Stop") { Task { await appState.stopAndProcessMeeting(); recorderPresented = false } }
                         .controlSize(.regular)
                 } else if !isActive {
-                    Button { appState.statusMessage = "Ready"; statusDetailsExpanded = false } label: {
+                    Button { appState.statusMessage = "Ready" } label: {
                         Image(systemName: "xmark").frame(width: 24, height: 24)
                     }.buttonStyle(.plain).accessibilityLabel("Dismiss message").help("Dismiss message")
                 }
             }
-            if !statusDetailsExpanded {
-                Text(statusSummary).font(.callout).foregroundStyle(.secondary)
-                    .lineLimit(3).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            Text(statusSummary).font(.callout).foregroundStyle(.secondary)
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if appState.isSettingUpSpeechModels && appState.statusMessage != "Ready"
+                && appState.statusMessage != statusSummary {
+                Text(appState.statusMessage).font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
-            DisclosureGroup("Details", isExpanded: $statusDetailsExpanded) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(statusSummary)
-                        if appState.isSettingUpSpeechModels && appState.statusMessage != "Ready" {
-                            Text(appState.statusMessage).foregroundStyle(.secondary)
-                        }
-                    }.font(.callout).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
-                }.frame(maxHeight: 160)
-            }.font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
         .minutesControlGlass(in: RoundedRectangle(cornerRadius: 16))
