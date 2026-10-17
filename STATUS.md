@@ -263,3 +263,5 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [~] iPhone regeneration verification awaits owner unlocking/starting the saved recording; no claim of word-for-word accuracy. See `docs/release/2026-10-17-long-recording-recovery.md`.
 
 - 2026-10-17 follow-up: iOS47 repairs stale managed audio paths after sandbox relocation on update/restore; original file stays untouched. 358 tests pass, build installed, owner asked to reopen and regenerate (device locked). Mac52 installed with single status text and no redundant Details disclosure.
+
+- 2026-10-17 iOS48: phone47 confirmed 591 saved transcript words; fixed non-converging AI summary reduction and removed automatic extractive substitution. Actual phone-transcript local-model run succeeded (6 bullets / 110 words); 359 tests pass. Installed48; awaiting summary-only verification on phone.

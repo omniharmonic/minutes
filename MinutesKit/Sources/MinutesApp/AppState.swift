@@ -811,16 +811,9 @@ public final class AppState: ObservableObject {
             isSummarizing = true
             defer { isSummarizing = false }
             statusMessage = apple ? "Preparing notes with Apple's on-device model…" : "Preparing notes from the transcript…"
-            let generated: MeetingSummary
-            var fallbackReason: String?
-            do {
-                generated = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
-            } catch {
-                // Summarization failure must not turn a valid recording into a failed one.
-                fallbackReason = error.localizedDescription
-                generated = try await Summarizer().summarize(meeting: meeting, utterances: utterances,
-                                                            attendees: attendees, template: template)
-            }
+            // A failed AI request must never be substituted with excerpts and
+            // stored as if the requested summary had completed.
+            let generated = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
             var saved = false
             try store.withImmediateTransaction {
                 guard let latest = store.getMeeting(id: meetingID),
@@ -831,9 +824,7 @@ public final class AppState: ObservableObject {
             }
             if saved {
                 if currentMeeting?.id == meetingID { currentSummary = generated }
-                if let fallbackReason {
-                    statusMessage = "Recording saved. Automatic summary failed: \(fallbackReason) Transcript highlights are saved; no AI summary was generated."
-                } else if Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes) {
+                if Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes) {
                     statusMessage = generated.overview
                 } else {
                     statusMessage = apple
@@ -844,7 +835,7 @@ public final class AppState: ObservableObject {
                 statusMessage = "Recording processed. Changes made while preparing notes were preserved."
             }
         } catch {
-            statusMessage = "Recording and transcript saved; automatic notes could not be saved: \(error.localizedDescription)"
+            statusMessage = "Recording and transcript saved. AI summary pending; retry Generate Summary: \(error.localizedDescription)"
         }
     }
     

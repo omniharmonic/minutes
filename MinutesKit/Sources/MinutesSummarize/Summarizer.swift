@@ -77,20 +77,22 @@ public final class Summarizer: Sendable {
             if prompts.count > 1 {
                 var drafts = try SummaryEvidence.draftRecords(parts)
                 let reduction = """
-                Write a coherent whole-meeting brief from intermediate draft facts in chronological order. \(template.guidance) Merge related points and remove repetition. Preserve concrete decisions, reasons, explicit follow-ups and unresolved issues, including changed plans and negation. Never invent owners, commitments, or dates. Every bullet must cite its original supplied source IDs (id/additionalIDs). N IDs remain untimed personal context. No generic 'participants discussed' filler or metadata. These are intermediate notes, not new transcript quotations.
+                Write a coherent whole-meeting brief from intermediate draft facts in chronological order. Use at most three short bullets and fewer words than the input facts, combining related facts without losing concrete outcomes. \(template.guidance) Merge related points and remove repetition. Preserve concrete decisions, reasons, explicit follow-ups and unresolved issues, including changed plans and negation. Never invent owners, commitments, or dates. Every bullet must cite its original supplied source IDs (id/additionalIDs). N IDs remain untimed personal context. No generic 'participants discussed' filler or metadata. These are intermediate notes, not new transcript quotations.
                 """
-                var completed = false
                 for _ in 0..<6 {
                     let reductions = try await SummaryEvidence.fittingPrompts(records: drafts, title: title, template: template,
                         instructions: reduction, provider: provider)
                     var combined: [String] = []
                     for prompt in reductions { combined.append(try await Self.generateValidated(provider: provider, instructions: reduction, prompt: prompt)) }
-                    if reductions.count == 1 { parts = combined; completed = true; break }
+                    if reductions.count == 1 { parts = combined; break }
                     let next = try SummaryEvidence.draftRecords(combined)
-                    guard next.reduce(0, { $0 + $1.text.utf8.count }) < drafts.reduce(0, { $0 + $1.text.utf8.count }) else { throw SummaryError.synthesisDidNotConverge }
+                    // A model need not shrink each pass. The first-pass notes
+                    // already cover every source chunk and passed citation checks.
+                    // Keep those complete notes instead of discarding valid work
+                    // or truncating the middle of the meeting to force a fit.
+                    guard next.reduce(0, { $0 + $1.text.utf8.count }) < drafts.reduce(0, { $0 + $1.text.utf8.count }) else { break }
                     drafts = next
                 }
-                guard completed else { throw SummaryError.synthesisDidNotConverge }
             }
             generatedMarkdown = Self.conciseDraft(parts)
         }

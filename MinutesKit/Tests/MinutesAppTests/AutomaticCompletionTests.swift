@@ -57,11 +57,13 @@ import MinutesSummarize
         #expect(state.statusMessage.localizedCaseInsensitiveContains("no speech"))
         #expect(store.getMeeting(id: id)?.audioPath != nil)
     }
-    @Test func summaryFailureFallsBackToLocalExtractiveNotes() async throws {
+    @Test func summaryFailurePreservesTranscriptWithoutSubstitutingExtractiveNotes() async throws {
         let (state, store, root) = try fixture(summaryFails: true); defer { try? FileManager.default.removeItem(at: root) }
         state.startQuickMeeting(); let id = try #require(state.activeRecordingMeetingID)
         await state.stopAndProcessMeeting()
-        #expect(store.getSummary(meetingId: id)?.overview.contains("Telescope calibration") == true)
+        #expect(store.getSummary(meetingId: id) == nil)
+        #expect(!store.listUtterances(meetingId: id).isEmpty)
+        #expect(state.statusMessage.contains("AI summary pending"))
         #expect(store.getMeeting(id: id)?.status == "needs_review")
         #expect(!state.isSummarizing)
     }

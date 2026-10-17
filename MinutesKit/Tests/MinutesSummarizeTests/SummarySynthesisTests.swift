@@ -20,7 +20,10 @@ private actor SynthesisFixtureProvider: LLMProvider {
     nonisolated let maximumInputBytes = 2_000
     private(set) var requests: [(String, String)] = []
     let corruptReduction: Bool
-    init(corruptReduction: Bool = false) { self.corruptReduction = corruptReduction }
+    let noncontracting: Bool
+    init(corruptReduction: Bool = false, noncontracting: Bool = false) {
+        self.corruptReduction = corruptReduction; self.noncontracting = noncontracting
+    }
     func generate(system: String, prompt: String) async throws -> String {
         requests.append((system, prompt))
         let records = prompt.components(separatedBy: "\n").compactMap { line -> [String: String]? in
@@ -28,6 +31,9 @@ private actor SynthesisFixtureProvider: LLMProvider {
             return (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
         }.filter { $0["kind"] != "meeting_title" }
         if records.contains(where: { $0["kind"] == "draft_summary" }) {
+            if noncontracting {
+                return records.map { "- " + $0["text"]! + " [" + $0["id"]! + "]" }.joined(separator: "\n")
+            }
             if corruptReduction { return "- The launch is approved [T9999]." }
             if let decision = records.first(where: { $0["text"]?.contains("CANCELLED_RELEASE") == true }) {
                 return "- CANCELLED_RELEASE: The release remains cancelled pending the safety review [\(decision["id"]!)]."
@@ -77,6 +83,19 @@ struct SummarySynthesisTests {
         #expect(requests.contains { $0.1.contains("\"kind\":\"draft_summary\"") })
         #expect(summary.overview.contains("CANCELLED_RELEASE"))
         #expect(summary.overview.contains("[T0008]"))
+        #expect(requests.allSatisfy { $0.0.utf8.count + $0.1.utf8.count <= 2_000 })
+    }
+    @Test("Non-contracting synthesis keeps validated AI notes from every source chunk")
+    func stalledReductionPreservesCompleteDraft() async throws {
+        let provider = SynthesisFixtureProvider(noncontracting: true)
+        let summary = try await Summarizer(provider: provider).summarize(
+            meeting: Meeting(id: "synthesis", title: "Release readiness"), utterances: discussion(), attendees: [])
+        #expect(summary.markdown.contains("On-device AI draft"))
+        #expect(!summary.markdown.contains("Transcript highlights"))
+        for index in 1...20 { #expect(summary.overview.contains(String(format: "[T%04d]", index))) }
+        #expect(summary.overview.contains("CANCELLED_RELEASE"))
+        let requests = await provider.recorded()
+        #expect(requests.count < 80)
         #expect(requests.allSatisfy { $0.0.utf8.count + $0.1.utf8.count <= 2_000 })
     }
     @Test("Synthesis cannot introduce references absent from its input facts")
