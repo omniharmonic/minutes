@@ -4,7 +4,7 @@ Preparation status 2026-10-17: owner will upload an unlisted YouTube video. The 
 
 ## Owner upload
 
-Upload the combined MP4 to YouTube as **Unlisted**, with a title such as **Minutes — Google Calendar OAuth verification (macOS and iOS)**. Return its watch URL so the actual link can be saved with the Calendar scope justification. Do not upload raw screenshots or temporary capture files: those include unredacted private information. The edited MP4 contains no audio track, authorization URLs, callback codes or tokens.
+The owner uploaded the combined MP4: https://youtu.be/ASwsOu81GCo . On 2026-10-17 the actual URL, scope justification and an explicit explanation of the edited frames/iPhone simulator were saved in Google Cloud. The public-app questionnaire was completed and submitted. Verification Center now reports **Your app's data access is under review**. Branding remains verified. This confirms submission, not approval. Do not upload raw screenshots or temporary capture files: those include unredacted private information. The edited MP4 contains no audio track, authorization URLs, callback codes or tokens.
 
 ## Required footage
 
@@ -21,4 +21,4 @@ Google's verification form requires a YouTube link and footage covering all OAut
 
 ## Current review status
 
-Brand/domain verified and published; External audience In production. Calendar event sensitive scope remains unverified with a 100-user lifetime cap until approved. Written justification is prepared in the Google form; the required video is missing. A fresh-Mac bundle bootstrap passed using the actual notarized artifact with an empty in-memory credential store and mock token transport; this is not a replacement for the real consent footage.
+Brand/domain verified and published; External audience In production. Calendar event sensitive scope is **under review**, with the unverified-user cap remaining until approved. Written justification and the owner's uploaded video were submitted. A fresh-Mac bundle bootstrap passed using the actual notarized artifact with an empty in-memory credential store and mock token transport; real Mac and iOS sign-in and Upcoming population were also verified during the demo captures.

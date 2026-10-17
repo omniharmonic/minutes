@@ -394,7 +394,6 @@ public struct MainWindowView: View {
         .onKeyPress(.downArrow) { moveMeetingSelection(by: 1); return .handled }
         .onKeyPress(.upArrow) { moveMeetingSelection(by: -1); return .handled }
         .background(MinutesTheme.bg)
-        .ignoresSafeArea(.container, edges: .top)
         .navigationTitle(appState.libraryTitle)
         .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
         .overlay {
