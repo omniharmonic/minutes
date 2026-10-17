@@ -19,3 +19,6 @@ audit/*.log
 *.p8
 .env
 .env.*
+
+# Publisher native registration is injected only into ignored signed products.
+GoogleDesktopClientRegistration.json

@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "40"
+    CURRENT_PROJECT_VERSION: "41"
     DEVELOPMENT_TEAM: 83Y42N33H8
     GOOGLE_REVERSED_CLIENT_ID: com.googleusercontent.apps.618880165655-h7cgl66bg5i3539cv8npvthhp9i53uhk
 targets:
@@ -67,6 +67,7 @@ targets:
               - minutes
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: Record meeting audio on this device when you tap Record.
         NSSpeechRecognitionUsageDescription: Transcribe saved meeting audio using on-device speech recognition.
         NSCalendarsFullAccessUsageDescription: Connect meetings and invitees from the calendars you configure on this device.

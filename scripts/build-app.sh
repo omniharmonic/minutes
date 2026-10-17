@@ -55,6 +55,9 @@ done < <(otool -L "$MACOS_DIR/Minutes" | awk 'NR > 1 { print $1 }')
 # Embed exactly the same privacy identity in the Mach-O and app wrapper.
 cp "$ROOT_DIR/MinutesKit/Sources/MinutesApp/Info.plist" "$CONTENTS_DIR/Info.plist"
 python3 "$ROOT_DIR/scripts/verify-app-privacy.py" "$APP_BUNDLE"
+if [[ "${MINUTES_BUNDLE_GOOGLE_REGISTRATION:-0}" == "1" ]]; then
+    python3 "$ROOT_DIR/scripts/inject-google-registration.py" "$APP_BUNDLE"
+fi
 
 ENTITLEMENTS="$ROOT_DIR/scripts/Minutes.entitlements"
 SIGNING_IDENTITY="${DEVELOPER_ID_APPLICATION:--}"

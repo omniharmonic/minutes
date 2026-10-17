@@ -46,6 +46,51 @@ public enum GoogleDesktopClientRegistration {
         return value.clientSecret
     }
 }
+/// Opt-in publisher registration provisioning. The resource is a public native-client
+/// registration, extractable from a distributed app; it must never contain user tokens.
+/// Packaging that resource requires an explicit exception to Keychain-only storage.
+public struct GoogleDesktopRegistrationProvisioning: Sendable {
+    public static let resourceName = "GoogleDesktopClientRegistration"
+    private let requiredClientID: String?
+    private let load: @Sendable () throws -> Data?
+
+    public init(requiredClientID: String? = nil, load: @escaping @Sendable () throws -> Data?) {
+        self.requiredClientID = requiredClientID
+        self.load = load
+    }
+
+    /// Only the publisher client declared by the app requires provisioning. Custom
+    /// clients retain Google's optional-registration behavior.
+    public static func bundled(in bundle: Bundle = .main) -> Self {
+        let publisherID = bundle.object(forInfoDictionaryKey: "GoogleDesktopClientID") as? String
+        let url = bundle.url(forResource: resourceName, withExtension: "json")
+        return Self(requiredClientID: publisherID) {
+            guard let url else { return nil }
+            return try Data(contentsOf: url)
+        }
+    }
+
+    func bootstrap(clientID: String, credentials: any OAuthCredentialStore) throws {
+        if try GoogleDesktopClientRegistration.secret(clientID: clientID, credentials: credentials) != nil { return }
+        // A publisher resource must never provision or block another client's flow.
+        if let requiredClientID, requiredClientID != clientID { return }
+        let data: Data?
+        do { data = try load() } catch { throw OAuthError.desktopRegistrationInvalid }
+        guard let data else {
+            if requiredClientID == clientID { throw OAuthError.desktopRegistrationRequired }
+            return
+        }
+        struct Registration: Decodable { let clientID: String; let clientSecret: String }
+        guard data.count <= 4096,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["clientID", "clientSecret"],
+              let value = try? JSONDecoder().decode(Registration.self, from: data),
+              value.clientID == clientID,
+              !value.clientSecret.isEmpty, value.clientSecret.utf8.count <= 1024,
+              !value.clientSecret.contains(where: \.isWhitespace) else { throw OAuthError.desktopRegistrationInvalid }
+        try GoogleDesktopClientRegistration.save(clientID: value.clientID, clientSecret: value.clientSecret, credentials: credentials)
+    }
+}
 public enum GoogleOAuthPlatform: Sendable { case desktop, iOS }
 @MainActor public protocol GoogleOAuthUserAgent: AnyObject, Sendable {
     var platform: GoogleOAuthPlatform { get }
@@ -102,13 +147,15 @@ public actor GoogleCalendarConnection {
     private let configuration: GoogleCalendarConfiguration
     private let credentials: any OAuthCredentialStore
     private let transport: any GoogleHTTPTransport
+    private let desktopRegistration: GoogleDesktopRegistrationProvisioning
     private let service = "app.minutes.oauth.google-calendar"
     private var activeClientID: String?
     private var generation = 0
     private var refresh: Task<GoogleStoredTokens, Error>?
 
-    public init(configuration: GoogleCalendarConfiguration, credentialStore: any OAuthCredentialStore = KeychainOAuthCredentialStore(), transport: any GoogleHTTPTransport = GoogleURLSessionTransport()) {
+    public init(configuration: GoogleCalendarConfiguration, credentialStore: any OAuthCredentialStore = KeychainOAuthCredentialStore(), transport: any GoogleHTTPTransport = GoogleURLSessionTransport(), desktopRegistration: GoogleDesktopRegistrationProvisioning = .bundled()) {
         self.configuration = configuration; self.credentials = credentialStore; self.transport = transport
+        self.desktopRegistration = desktopRegistration
         #if os(iOS)
         self.activeClientID = configuration.iOSClientID
         #else
@@ -142,6 +189,7 @@ public actor GoogleCalendarConnection {
         let current = generation
         let platform = await agent.platform
         let client = try configuration.clientID(for: platform)
+        if platform == .desktop { try desktopRegistration.bootstrap(clientID: client, credentials: credentials) }
         let redirect = try await agent.prepareRedirect(configuration: configuration)
         let attempt = try OAuthPKCEAttempt(clientID: client, redirectURI: redirect, scopes: Self.readOnlyScopes)
         let callback = try await agent.authorize(url: authorizationURL(for: attempt), redirectURI: redirect)
@@ -158,6 +206,9 @@ public actor GoogleCalendarConnection {
     }
     private func requestTokens(_ fields: [String: String], previousRefresh: String?) async throws -> GoogleStoredTokens {
         var fields = fields
+        if let client = fields["client_id"], client == configuration.desktopClientID, client != configuration.iOSClientID {
+            try desktopRegistration.bootstrap(clientID: client, credentials: credentials)
+        }
         if let client = fields["client_id"], client == configuration.desktopClientID,
            client != configuration.iOSClientID,
            let secret = try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) {

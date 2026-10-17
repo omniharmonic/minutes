@@ -5,7 +5,7 @@ import LocalAuthentication
 
 public enum OAuthError: Error, LocalizedError, Sendable {
     case invalidConfiguration, invalidCallback, stateMismatch, authorizationDenied, signInRequired
-    case invalidResponse, missingScopes, cancelled, presentationUnavailable, desktopRegistrationRequired
+    case invalidResponse, missingScopes, cancelled, presentationUnavailable, desktopRegistrationRequired, desktopRegistrationInvalid
     case remoteFailure(Int), keychainFailure(Int32)
     public var errorDescription: String? {
         switch self {
@@ -13,7 +13,8 @@ public enum OAuthError: Error, LocalizedError, Sendable {
         case .invalidCallback, .stateMismatch: return "The authorization response did not match this sign-in attempt. Start sign-in again."
         case .authorizationDenied: return "Authorization was declined."
         case .signInRequired: return "Sign in again; saved authorization is missing, expired or revoked."
-        case .desktopRegistrationRequired: return "Google requires this desktop client registration in Keychain. Configure the desktop registration, then reconnect; changing your Google account will not fix this setup error."
+        case .desktopRegistrationRequired: return "This Minutes build is missing its Google desktop registration. Install an updated build or contact Minutes support before connecting Google Calendar."
+        case .desktopRegistrationInvalid: return "This Minutes build contains an invalid Google desktop registration. Install an updated build or contact Minutes support."
         case .invalidResponse: return "The service returned an invalid authorization or calendar response."
         case .missingScopes: return "The service did not grant the required authorization scope."
         case .cancelled: return "Authorization was cancelled."

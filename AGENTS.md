@@ -21,3 +21,6 @@
 - Voiceprints are biometric-ish data: provide delete paths, never export them via adapters, and never log vectors.
 - Don't write to the user's real Parachute vault in automated tests unless `MINUTES_LIVE_PARACHUTE=1`, and then only under the path prefix `Minutes-Test/`.
 - If a spike invalidates an assumption (thresholds, API shape, platform minimums), update ARCHITECTURE + DECISIONS before building on it.
+
+## Owner-approved native Google registration exception (2026-10-17)
+The owner explicitly approved distributing the existing Google **Desktop native public-client registration** as an extractable resource in the signed Mac app, then importing it into each user's Keychain. Only build-time injection is allowed: no registration value in source, Info.plist, logs or chat. User Google access/refresh tokens and Apple credentials remain Keychain-only and are never bundled. PKCE/state checks and strict matching to the public desktop client ID remain required. iOS never bundles the desktop registration.

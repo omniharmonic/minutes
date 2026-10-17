@@ -40,10 +40,11 @@ private actor ScriptedGoogleHTTP: GoogleHTTPTransport {
     }
 }
 @MainActor private final class FixtureGoogleAgent: GoogleOAuthUserAgent {
-    let platform: GoogleOAuthPlatform = .desktop
+    let platform: GoogleOAuthPlatform
+    var prepareCount = 0
     let badState: Bool
-    init(badState: Bool = false) { self.badState = badState }
-    func prepareRedirect(configuration: GoogleCalendarConfiguration) async throws -> URL { URL(string: "http://127.0.0.1:12345/oauth2callback")! }
+    init(badState: Bool = false, platform: GoogleOAuthPlatform = .desktop) { self.badState = badState; self.platform = platform }
+    func prepareRedirect(configuration: GoogleCalendarConfiguration) async throws -> URL { prepareCount += 1; return URL(string: "http://127.0.0.1:12345/oauth2callback")! }
     func authorize(url: URL, redirectURI: URL) async throws -> URL {
         let requested = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "scope" }!.value!.split(separator: " ").map(String.init)
         #expect(Set(requested) == Set(["https://www.googleapis.com/auth/calendar.events.readonly", "https://www.googleapis.com/auth/calendar.calendarlist.readonly"]))
@@ -176,5 +177,129 @@ extension GoogleOAuthTests {
         } catch OAuthError.desktopRegistrationRequired {
             #expect(!OAuthError.desktopRegistrationRequired.localizedDescription.contains("fixture-sensitive-diagnostic"))
         }
+    }
+}
+
+
+extension GoogleOAuthTests {
+    @Test @MainActor func packagedMacRegistrationBootstrapsEmptyCredentialStore() async throws {
+        // Release acceptance: never reads or changes the owner's Keychain, opens a
+        // browser, or sends the bundled registration to a network endpoint.
+        guard let path = ProcessInfo.processInfo.environment["MINUTES_PACKAGED_MAC_APP"] else { return }
+        let artifact = try #require(Bundle(path: path))
+        let client = try #require(artifact.object(forInfoDictionaryKey: "GoogleDesktopClientID") as? String)
+        let credentials = MemoryGoogleCredentials()
+        let http = ScriptedGoogleHTTP([googleResponse(googleToken)])
+        let connection = GoogleCalendarConnection(configuration: .init(desktopClientID: client), credentialStore: credentials,
+            transport: http, desktopRegistration: .bundled(in: artifact))
+        let initiallyEmpty = try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) == nil
+        #expect(initiallyEmpty)
+        try await connection.connect(using: FixtureGoogleAgent())
+        let provisioned = try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) != nil
+        #expect(provisioned)
+        let connected = try await connection.status().connected
+        #expect(connected)
+        try await connection.disconnect(revoke: false)
+        let registrationSurvivesDisconnect = try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) != nil
+        #expect(registrationSurvivesDisconnect)
+    }
+
+    @Test @MainActor func freshInstallBootstrapsRegistrationAndRefreshFromSameArtifact() async throws {
+        let credentials = MemoryGoogleCredentials()
+        let client = "publisher.apps.googleusercontent.com"
+        let artifact = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".bundle")
+        defer { try? FileManager.default.removeItem(at: artifact) }
+        let contents = artifact.appendingPathComponent("Contents")
+        let resources = contents.appendingPathComponent("Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        let metadata: [String: Any] = ["CFBundleIdentifier": "app.minutes.fixture." + UUID().uuidString,
+            "CFBundlePackageType": "BNDL", "GoogleDesktopClientID": client]
+        try PropertyListSerialization.data(fromPropertyList: metadata, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        try Data(#"{"clientID":"publisher.apps.googleusercontent.com","clientSecret":"fixture-bundled-registration"}"#.utf8)
+            .write(to: resources.appendingPathComponent("GoogleDesktopClientRegistration.json"))
+        let artifactBundle = try #require(Bundle(url: artifact))
+        let provisioning = GoogleDesktopRegistrationProvisioning.bundled(in: artifactBundle)
+        let http = ScriptedGoogleHTTP([googleResponse(googleToken), googleResponse("", status: 401), googleResponse(googleToken), googleResponse(#"{"items":[]}"#)])
+        let connection = GoogleCalendarConnection(configuration: .init(desktopClientID: client), credentialStore: credentials, transport: http, desktopRegistration: provisioning)
+        #expect(try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) == nil)
+        try await connection.connect(using: FixtureGoogleAgent())
+        #expect(try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) == "fixture-bundled-registration")
+        // A second process restores tokens and registration from the same store.
+        let restored = GoogleCalendarConnection(configuration: .init(desktopClientID: client), credentialStore: credentials, transport: http, desktopRegistration: provisioning)
+        _ = try await restored.calendars()
+        let requests = await http.requests
+        for index in [0, 2] {
+            #expect(String(decoding: requests[index].httpBody!, as: UTF8.self).contains("client_secret=fixture-bundled-registration"))
+        }
+        try await restored.disconnect(revoke: false)
+        #expect(try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) != nil)
+        #expect(try await restored.status().connected == false)
+    }
+
+    @Test @MainActor func missingPublisherRegistrationFailsBeforeBrowser() async throws {
+        let client = "publisher.apps.googleusercontent.com"
+        let http = ScriptedGoogleHTTP([])
+        let browser = FixtureGoogleAgent()
+        let connection = GoogleCalendarConnection(configuration: .init(desktopClientID: client), credentialStore: MemoryGoogleCredentials(), transport: http,
+            desktopRegistration: .init(requiredClientID: client, load: { nil }))
+        do {
+            try await connection.connect(using: browser)
+            Issue.record("Expected missing registration preflight")
+        } catch OAuthError.desktopRegistrationRequired {}
+        #expect(browser.prepareCount == 0)
+        #expect(await http.requests.isEmpty)
+    }
+
+    @Test @MainActor func existingKeychainRegistrationWorksWithoutBundle() async throws {
+        let client = "publisher.apps.googleusercontent.com"
+        let credentials = MemoryGoogleCredentials()
+        try GoogleDesktopClientRegistration.save(clientID: client, clientSecret: "fixture-existing", credentials: credentials)
+        let http = ScriptedGoogleHTTP([googleResponse(googleToken)])
+        let connection = GoogleCalendarConnection(configuration: .init(desktopClientID: client), credentialStore: credentials, transport: http,
+            desktopRegistration: .init(requiredClientID: client, load: { throw OAuthError.invalidResponse }))
+        try await connection.connect(using: FixtureGoogleAgent())
+        #expect(String(decoding: await http.requests[0].httpBody!, as: UTF8.self).contains("client_secret=fixture-existing"))
+    }
+
+    @Test(arguments: [
+        #"{"clientID":"other.apps.googleusercontent.com","clientSecret":"fixture-secret"}"#,
+        #"{"clientID":"publisher.apps.googleusercontent.com","clientSecret":""}"#,
+        #"{"clientID":"publisher.apps.googleusercontent.com","clientSecret":"fixture secret"}"#,
+        #"{"clientID":"publisher.apps.googleusercontent.com","clientSecret":"fixture-secret","refresh_token":"must-not-ship"}"#,
+        #"{"installed":{"client_id":"publisher.apps.googleusercontent.com","client_secret":"fixture-secret"}}"#,
+        "invalid-json"
+    ]) @MainActor func malformedBundledRegistrationFailsClosed(json: String) async throws {
+        let client = "publisher.apps.googleusercontent.com"
+        let credentials = MemoryGoogleCredentials()
+        let http = ScriptedGoogleHTTP([])
+        let browser = FixtureGoogleAgent()
+        let connection = GoogleCalendarConnection(configuration: .init(desktopClientID: client), credentialStore: credentials, transport: http,
+            desktopRegistration: .init(requiredClientID: client, load: { Data(json.utf8) }))
+        do {
+            try await connection.connect(using: browser)
+            Issue.record("Expected invalid registration preflight")
+        } catch OAuthError.desktopRegistrationInvalid {}
+        #expect(browser.prepareCount == 0)
+        #expect(await http.requests.isEmpty)
+        #expect(try GoogleDesktopClientRegistration.secret(clientID: client, credentials: credentials) == nil)
+    }
+
+    @Test @MainActor func publisherResourceDoesNotAffectBYOClient() async throws {
+        let credentials = MemoryGoogleCredentials()
+        let http = ScriptedGoogleHTTP([googleResponse(googleToken)])
+        let connection = GoogleCalendarConnection(configuration: .init(desktopClientID: "custom.apps.googleusercontent.com"), credentialStore: credentials, transport: http,
+            desktopRegistration: .init(requiredClientID: "publisher.apps.googleusercontent.com", load: { throw OAuthError.invalidResponse }))
+        try await connection.connect(using: FixtureGoogleAgent())
+        #expect(!String(decoding: await http.requests[0].httpBody!, as: UTF8.self).contains("client_secret"))
+        #expect(try GoogleDesktopClientRegistration.secret(clientID: "custom.apps.googleusercontent.com", credentials: credentials) == nil)
+    }
+
+    @Test @MainActor func iOSNeverLoadsDesktopRegistration() async throws {
+        let http = ScriptedGoogleHTTP([googleResponse(googleToken)])
+        let connection = GoogleCalendarConnection(configuration: .init(desktopClientID: "publisher.apps.googleusercontent.com", iOSClientID: "mobile.apps.googleusercontent.com"), credentialStore: MemoryGoogleCredentials(), transport: http,
+            desktopRegistration: .init(requiredClientID: "publisher.apps.googleusercontent.com", load: { throw OAuthError.invalidResponse }))
+        try await connection.connect(using: FixtureGoogleAgent(platform: .iOS))
+        #expect(!String(decoding: await http.requests[0].httpBody!, as: UTF8.self).contains("client_secret"))
     }
 }
