@@ -38,7 +38,27 @@ public final class AppStartup: ObservableObject {
 
 @MainActor
 final class MinutesApplicationDelegate: NSObject, NSApplicationDelegate {
-    weak var state: AppState?
+    weak var state: AppState? {
+        didSet { importPendingFile() }
+    }
+    private var pendingFile: URL?
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.count == 1, let url = urls.first, url.isFileURL else { return }
+        pendingFile = url
+        importPendingFile()
+    }
+
+    private func importPendingFile() {
+        guard let state, let url = pendingFile else { return }
+        pendingFile = nil
+        // Use the same copy-before-processing path as the file picker. Finder's
+        // Open With never edits the supplied recording or starts capture/playback.
+        Task {
+            do { _ = try await state.importMedia(from: url, isTranscript: ["txt", "md"].contains(url.pathExtension.lowercased())) }
+            catch { state.statusMessage = "Could not import file: \(error.localizedDescription)" }
+        }
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let state, state.isRecording || state.isStartingRecording || state.isFinalizingRecording || state.isProcessing || state.isSummarizing else { return .terminateNow }

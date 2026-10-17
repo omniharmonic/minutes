@@ -253,3 +253,11 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] 353 tests, iOS simulator compile, signed/notarized installed Mac50. Native silent 60-second fixture: two groups, manual naming carried to a later matching window, zero retries/drops.
 - [~] Six-condition held-out owner matrix and matching synthetic-negative matrix completed. Gain changes pass; noise misses both paths and telephone-like audio misses live naming. Zero wrong-person matches in these limited samples. Spectral denoising failed and is not shipped. Broad recognition reliability is NOT established.
 - Reports: `docs/release/2026-10-17-speaker-controls.md`, `docs/release/2026-10-17-voice-reuse.md`; repeatable silent CLI runner: `scripts/voice-condition-audit.py`.
+
+## 2026-10-17 long recording recovery / Mac51 and iOS46
+
+- [x] Preserved the important iPhone recording twice before changes; post-update original remains byte-identical.
+- [x] Replaced global retry cap with per-gap six-/three-second recovery and internal/trailing coverage checks. Preserve low-confidence recognized words through merger.
+- [x] Silent full-file Mac verification: 589 words saved, 152 recovered by retries, no remaining detected-speech gaps or exact duplicate word/timestamp entries.
+- [x] 357 tests pass; signed iOS46 installed in place; original audio can be shared from a failed meeting. Mac supports Finder Open With import via existing copy-first pipeline.
+- [~] iPhone regeneration verification awaits owner unlocking/starting the saved recording; no claim of word-for-word accuracy. See `docs/release/2026-10-17-long-recording-recovery.md`.

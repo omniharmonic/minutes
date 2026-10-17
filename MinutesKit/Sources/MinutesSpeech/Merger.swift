@@ -62,9 +62,11 @@ public enum TranscriptMerger {
         let validSegments = segments.filter { ($0.end - $0.start) >= config.minSpeechDuration }
         let activeSegments = validSegments
         
-        // Filter out low confidence non-speech noise words based on aggressiveness
-        let noiseConfidenceFloor = config.aggressiveness * 0.25
-        let speechWords = words.filter { $0.confidence >= noiseConfidenceFloor }
+        // Confidence is review metadata, not permission to erase recognized
+        // speech. In particular Apple may give real words confidence zero.
+        // Preserve every valid timed hypothesis through persistence.
+        let speechWords = words.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
+            .sorted { $0.start < $1.start }
         
         if speechWords.isEmpty {
             return []

@@ -68,8 +68,8 @@ struct AdversarialSpeechTests {
         #expect(utterances[0].text == "valid speech")
     }
     
-    @Test("Aggressiveness filters low-confidence non-speech words")
-    func testAggressivenessFiltersLowConfidenceNoise() {
+    @Test("Aggressiveness preserves recognized hypotheses and their confidence")
+    func testAggressivenessPreservesLowConfidenceHypotheses() {
         let segments = [
             TimedSpeakerSegment(speakerId: "spk_1", start: 0.0, end: 10.0)
         ]
@@ -80,7 +80,7 @@ struct AdversarialSpeechTests {
             ASRWord(word: "everyone", start: 2.6, end: 3.2, confidence: 0.90)
         ]
         
-        // With aggressiveness = 0.8, noise confidence floor is 0.8 * 0.25 = 0.20
+        // A low score is not proof of non-speech; preserve it for review.
         let highAggConfig = DiarizationConfig(pauseThreshold: 1.8, aggressiveness: 0.8, minSpeechDuration: 0.3)
         let utterances = TranscriptMerger.merge(
             meetingId: "m_agg",
@@ -90,8 +90,8 @@ struct AdversarialSpeechTests {
         )
         
         #expect(utterances.count == 1)
-        #expect(utterances[0].text == "Hello everyone")
-        #expect(!utterances[0].text.contains("[cough]"))
+        #expect(utterances[0].text == "[cough] Hello everyone")
+        #expect(utterances[0].words.first?.confidence == 0.05)
     }
     
     @Test("Diarization pause threshold dynamically controls utterance splitting")

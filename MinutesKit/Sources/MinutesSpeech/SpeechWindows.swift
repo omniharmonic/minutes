@@ -43,32 +43,37 @@ enum SpeechWindows {
         guard !windows.isEmpty else { return [] }
         let primary = try await transcribePlannedWindows(audio: audio, windows: windows, backend: backend, fallbackTranscriptURL: fallbackTranscriptURL)
         let spans = detectedSpans(segments, duration: audio.duration)
-        let sparse = spans.filter { $0.end - $0.start >= 3 && coverage(of: $0, words: primary) < 0.15 }
-        // A single bounded recovery pass. Short requests recover speech the local
-        // recognizer can omit in a longer request; no fixed speaker count is used.
-        var retryWindows: [SpeechRecognitionWindow] = []
-        for span in sparse {
-            var cursor = span.start
-            while cursor < span.end, retryWindows.count < 12 {
-                let end = min(span.end, cursor + 6)
-                retryWindows.append(.init(start: max(0, cursor - 0.4), end: min(audio.duration, end + 0.4), ownedStart: cursor, ownedEnd: end))
-                cursor = end
-            }
-        }
-        let recovered = try await transcribePlannedWindows(audio: audio, windows: retryWindows, backend: backend, fallbackTranscriptURL: fallbackTranscriptURL, phase: "retry")
         var result = primary
-        for word in recovered {
-            // Keep original hypotheses wherever time overlaps; do not duplicate or
-            // silently replace recognized text with a second hypothesis.
-            let overlaps = result.contains { existing in
-                let overlap = min(existing.end, word.end) - max(existing.start, word.start)
-                return overlap > 0.5 * min(existing.end - existing.start, word.end - word.start)
+        var retryCount = 0
+        // Budget per unresolved interval, never per recording. A long recording
+        // must not spend every retry on its opening minute. Recompute gaps after
+        // each pass so successful hypotheses are retained and not requested again.
+        for length in [6.0, 3.0] {
+            let gaps = unresolvedIntervals(spans: spans, words: result, minimumGap: 3)
+            var retries: [SpeechRecognitionWindow] = []
+            for gap in gaps {
+                var cursor = gap.start
+                while cursor < gap.end {
+                    let end = min(gap.end, cursor + length)
+                    retries.append(.init(start: max(0, cursor - 0.4), end: min(audio.duration, end + 0.4),
+                        ownedStart: cursor, ownedEnd: end))
+                    cursor = end
+                }
             }
-            if !overlaps { result.append(word) }
+            retryCount += retries.count
+            let recovered = try await transcribePlannedWindows(audio: audio, windows: retries, backend: backend,
+                fallbackTranscriptURL: fallbackTranscriptURL, phase: "retry-\(Int(length))")
+            for word in recovered {
+                let overlaps = result.contains { existing in
+                    let overlap = min(existing.end, word.end) - max(existing.start, word.start)
+                    return overlap > 0.5 * min(existing.end - existing.start, word.end - word.start)
+                }
+                if !overlaps { result.append(word) }
+            }
         }
-        let uncovered = spans.filter { $0.end - $0.start >= 5 && coverage(of: $0, words: result) == 0 }
-        reportDiagnostics(["phase": "coverage", "primaryWords": primary.count, "retryWindows": retryWindows.count,
-            "sparseSpans": sparse.count, "addedWords": result.count - primary.count, "uncoveredSpans": uncovered.count])
+        let uncovered = unresolvedIntervals(spans: spans, words: result, minimumGap: 3)
+        reportDiagnostics(["phase": "coverage", "primaryWords": primary.count, "retryWindows": retryCount,
+            "addedWords": result.count - primary.count, "uncoveredSpans": uncovered.count])
         guard uncovered.isEmpty else {
             throw ASRError.transcriptionFailed("Some detected speech could not be transcribed after shorter retries. The complete audio is preserved. Try processing again; this attempt is incomplete.")
         }
@@ -88,13 +93,27 @@ enum SpeechWindows {
         return spans
     }
 
-    private static func coverage(of span: TimedSpeakerSegment, words: [ASRWord]) -> Double {
-        var covered = 0.0, lastEnd = span.start
-        for word in words.sorted(by: { $0.start < $1.start }) {
-            let start = max(span.start, word.start), end = min(span.end, word.end)
-            if end > start { covered += max(0, end - max(lastEnd, start)); lastEnd = max(lastEnd, end) }
+    /// Find internal and trailing holes too: one word cannot certify a long
+    /// diarization span as transcribed. Word timing includes natural pauses, so
+    /// only sustained holes trigger recovery; this is not a word-accuracy score.
+    static func unresolvedIntervals(spans: [TimedSpeakerSegment], words: [ASRWord], minimumGap: Double) -> [TimedSpeakerSegment] {
+        let ordered = words.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
+            .sorted { $0.start < $1.start }
+        var gaps: [TimedSpeakerSegment] = []
+        for span in spans {
+            var cursor = span.start
+            for word in ordered where word.end > span.start && word.start < span.end {
+                let start = max(span.start, word.start)
+                if start - cursor >= minimumGap {
+                    gaps.append(.init(speakerId: span.speakerId, start: cursor, end: start))
+                }
+                cursor = max(cursor, min(span.end, word.end))
+            }
+            if span.end - cursor >= minimumGap {
+                gaps.append(.init(speakerId: span.speakerId, start: cursor, end: span.end))
+            }
         }
-        return covered / (span.end - span.start)
+        return gaps
     }
 
     /// Low-level extraction/ownership boundary, also exercised independently of retry policy.

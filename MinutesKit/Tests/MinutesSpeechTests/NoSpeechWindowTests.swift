@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import AVFoundation
 @testable import MinutesSpeech
 
 private actor NoSpeechThenWords: SpeechTranscriptionBackend {
@@ -20,7 +21,67 @@ private actor RecognitionFailureFixture: SpeechTranscriptionBackend {
         throw ASRError.authorizationDenied
     }
 }
+private actor LongRecoveryFixture: SpeechTranscriptionBackend {
+    private(set) var calls = 0
+    func transcribe(audioURL: URL, fallbackTranscriptURL: URL?) async throws -> [ASRWord] {
+        calls += 1
+        let file = try AVAudioFile(forReading: audioURL)
+        let duration = Double(file.length) / file.processingFormat.sampleRate
+        if duration > 8 { throw ASRError.noSpeechDetected }
+        return [.init(word: "fixture", start: 0, end: duration, confidence: 1)]
+    }
+}
+private actor RetryOverlapFixture: SpeechTranscriptionBackend {
+    var calls = 0
+    func transcribe(audioURL: URL, fallbackTranscriptURL: URL?) async throws -> [ASRWord] {
+        calls += 1
+        if calls == 1 {
+            return [.init(word: "opening", start: 0, end: 8, confidence: 1),
+                    .init(word: "ending", start: 14, end: 20, confidence: 1)]
+        }
+        return [.init(word: "opening", start: 0, end: 0.3, confidence: 1),
+                .init(word: "middle", start: 0.4, end: 6.4, confidence: 1),
+                .init(word: "ending", start: 6.5, end: 6.8, confidence: 1)]
+    }
+}
 struct NoSpeechWindowTests {
+    @Test("Speaker attribution preserves zero-confidence recognized words")
+    func lowConfidenceWordsAreNotDeleted() {
+        let words = [ASRWord(word: "keep", start: 0, end: 1, confidence: 0),
+                     ASRWord(word: "both", start: 1, end: 2, confidence: 0.9)]
+        let utterances = TranscriptMerger.merge(meetingId: "test", words: words,
+            segments: [.init(speakerId: "s", start: 0, end: 2)], config: .init(aggressiveness: 1))
+        #expect(utterances.flatMap(\.words).map(\.word) == ["keep", "both"])
+        #expect(utterances.first?.words.first?.confidence == 0)
+    }
+    @Test("Retry context cannot duplicate already recognized words on either side of a gap")
+    func retryOverlapHasOneOwner() async throws {
+        let audio = DecodedAudio(samples: [Float](repeating: 0.1, count: 16000 * 20), sampleRate: 16000, duration: 20)
+        let words = try await SpeechWindows.transcribe(audio: audio,
+            segments: [.init(speakerId: "s", start: 0, end: 20)], backend: RetryOverlapFixture(), fallbackTranscriptURL: nil)
+        #expect(words.map(\.word) == ["opening", "middle", "ending"])
+        #expect(abs(words[1].start - 8) < 0.001)
+        #expect(abs(words[1].end - 14) < 0.001)
+    }
+    @Test("Every part of a long recording receives shorter retries, including the final minute")
+    func fullLengthRecovery() async throws {
+        let audio = DecodedAudio(samples: [Float](repeating: 0.1, count: 16000 * 401), sampleRate: 16000, duration: 401)
+        let backend = LongRecoveryFixture()
+        let words = try await SpeechWindows.transcribe(audio: audio,
+            segments: [.init(speakerId: "speaker", start: 0, end: 401)], backend: backend, fallbackTranscriptURL: nil)
+        #expect((words.last?.end ?? 0) >= 400)
+        #expect(SpeechWindows.unresolvedIntervals(spans: [.init(speakerId: "speaker", start: 0, end: 401)], words: words, minimumGap: 0.01).isEmpty)
+        #expect(zip(words, words.dropFirst()).allSatisfy { $0.start < $1.start })
+        #expect(await backend.calls > 60)
+    }
+    @Test("Recognized words at the beginning do not hide missing middle and trailing speech")
+    func internalGaps() {
+        let gaps = SpeechWindows.unresolvedIntervals(spans: [.init(speakerId: "s", start: 0, end: 30)],
+            words: [.init(word: "a", start: 0, end: 2, confidence: 1), .init(word: "b", start: 12, end: 14, confidence: 1)], minimumGap: 5)
+        #expect(gaps.count == 2)
+        #expect(gaps.first?.start == 2)
+        #expect(gaps.last?.end == 30)
+    }
     @Test("Only the exact observed Assistant no-speech error becomes a typed empty-window response")
     func classifyExactErrorOnly() {
         let error = ASRService.classifyRecognitionError(NSError(domain: "kAFAssistantErrorDomain", code: 1110))

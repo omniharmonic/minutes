@@ -105,6 +105,11 @@ struct IOSMeetingDetail: View {
                     Label("Speakers", systemImage: "person.2").tag("Speakers")
                 }.pickerStyle(.menu).labelsHidden().accessibilityLabel("Meeting view")
                 Menu {
+                    if let path = state.currentMeeting?.audioPath, FileManager.default.fileExists(atPath: path) {
+                        ShareLink(item: URL(fileURLWithPath: path)) {
+                            Label("Share Original Audio", systemImage: "waveform")
+                        }
+                    }
                     if !state.currentUtterances.isEmpty {
                         ShareLink(item: state.currentUtterances.map { "\($0.speakerName): \($0.text)" }.joined(separator: "\n\n"))
                     }

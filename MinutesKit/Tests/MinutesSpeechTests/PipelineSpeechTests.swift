@@ -235,10 +235,10 @@ extension PipelineSpeechTests {
         if includeSecondTurn { segments.append(.init(speakerID: "two", start: 6, end: 12, embedding: second)) }
         let pipeline = PipelineOrchestrator(asrService: FilteredTurnRecognitionFixture(includeSecondTurn: includeSecondTurn),
             diarizationService: DiarizationService(backend: FixtureDiarizationBackend(output: segments)))
-        do {
-            _ = try await pipeline.process(meetingId: "filtered-turn", audioURL: url)
-            Issue.record("Detected speech was silently removed by confidence filtering")
-        } catch is ASRError {}
+        let result = try await pipeline.process(meetingId: "filtered-turn", audioURL: url)
+        let savedWords = result.utterances.flatMap(\.words)
+        #expect(savedWords.map(\.word) == (includeSecondTurn ? ["first", "second"] : ["first"]))
+        #expect(savedWords.first?.confidence == 0)
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 }

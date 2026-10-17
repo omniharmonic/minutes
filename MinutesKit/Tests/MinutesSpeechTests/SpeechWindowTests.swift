@@ -8,7 +8,7 @@ private struct BoundedSpeechFixture: SpeechTranscriptionBackend {
         let decoded = try AudioDecoder.decode(fileURL: audioURL)
         guard decoded.duration < 8 else { throw ASRError.transcriptionFailed("Fixture reproduces early finalization with long surrounding silence") }
         #expect(audioURL.pathExtension == "wav")
-        return [ASRWord(word: "speech", start: 0.6, end: 1.1, confidence: 1)]
+        return [ASRWord(word: "speech", start: 0.6, end: decoded.duration - 0.4, confidence: 1)]
     }
 }
 struct SpeechWindowTests {
@@ -82,7 +82,7 @@ private actor DistinctTurnSpeechFixture: SpeechTranscriptionBackend {
         // Distinct real sample payloads establish that slicing did not skip or replace a turn.
         if index == 0 { #expect(maximum > 0.29 && minimum >= 0) }
         else { #expect(minimum < -0.19 && maximum <= 0) }
-        return [ASRWord(word: index == 0 ? "first" : "second", start: 0.5, end: 4.5, confidence: 1)]
+        return [ASRWord(word: index == 0 ? "first" : "second", start: 0.5, end: audio.duration - 0.4, confidence: 1)]
     }
 }
 
@@ -111,7 +111,7 @@ private actor FirstTurnLossFixture: SpeechTranscriptionBackend {
         let current = calls; calls += 1
         let audio = try AudioDecoder.decode(fileURL: audioURL)
         if current == 0 { return [] }
-        if current == 1 { return [.init(word: "second", start: 0.5, end: 4.5)] }
+        if current == 1 { return [.init(word: "second", start: 0.5, end: audio.duration - 0.4)] }
         #expect(audio.duration <= 6.8 + 0.001)
         return [.init(word: "first", start: 0.6, end: 1.5)]
     }
