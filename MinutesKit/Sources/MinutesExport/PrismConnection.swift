@@ -168,11 +168,23 @@ public actor PrismConnection: PrismClientProtocol {
     }
     public func enqueue(bundle: MeetingExportBundle, destinationVault: String, sourceRevision: Int = 1) throws -> OutboxItem {
         try requireVault(destinationVault)
+        if let directory = bundle.destinationDirectory {
+            try PrismExportDirectory.validate(directory)
+            guard capabilities?.operations.contains("destination:directory") == true else {
+                throw PrismError.invalidPayload("This Prism server needs an update before it can use a custom destination folder. Use Minutes or update the server.")
+            }
+        }
         guard sourceRevision == 1 else { throw PrismError.invalidPayload("Use enqueueNextRevision to advance a committed delivery") }
         return try manager().enqueueNextRevision(bundle: bundle, destinationVault: destinationVault)
     }
     public func enqueueNextRevision(bundle: MeetingExportBundle, destinationVault: String, resolvingConflictAt serverRevision: Int? = nil) throws -> OutboxItem {
         try requireVault(destinationVault)
+        if let directory = bundle.destinationDirectory {
+            try PrismExportDirectory.validate(directory)
+            guard capabilities?.operations.contains("destination:directory") == true else {
+                throw PrismError.invalidPayload("This Prism server needs an update before it can use a custom destination folder. Use Minutes or update the server.")
+            }
+        }
         return try manager().enqueueNextRevision(bundle: bundle, destinationVault: destinationVault, resolvingConflictAt: serverRevision)
     }
     private static func fingerprint(_ token: String) -> String { SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined() }

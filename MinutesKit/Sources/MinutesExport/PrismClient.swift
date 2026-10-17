@@ -87,6 +87,7 @@ public struct PrismSummaryContext: Codable, Sendable, Equatable {
 }
 
 public struct PrismMeetingPayload: Codable, Sendable, Equatable {
+    public let destinationDirectory: String?
     public let schemaVersion: Int
     public let sourceMeetingId: String
     public let sourceRevision: Int
@@ -102,6 +103,7 @@ public struct PrismMeetingPayload: Codable, Sendable, Equatable {
     public let contentHash: String
     
     public init(
+        destinationDirectory: String? = nil,
         schemaVersion: Int = 1,
         sourceMeetingId: String,
         sourceRevision: Int = 1,
@@ -116,6 +118,7 @@ public struct PrismMeetingPayload: Codable, Sendable, Equatable {
         summary: PrismSummaryContext,
         contentHash: String
     ) {
+        self.destinationDirectory = destinationDirectory
         self.schemaVersion = schemaVersion
         self.sourceMeetingId = sourceMeetingId
         self.sourceRevision = sourceRevision

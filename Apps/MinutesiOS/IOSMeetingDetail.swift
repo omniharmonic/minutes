@@ -56,7 +56,7 @@ struct IOSMeetingDetail: View {
                             onSaveBookmark: { bookmark in save { try state.store.saveBookmark(bookmark); state.currentBookmarks = state.store.listBookmarks(meetingId: meetingID) } },
                             onDeleteBookmark: { id in save { try state.store.deleteBookmark(id: id); state.currentBookmarks = state.store.listBookmarks(meetingId: meetingID) } },
                             onGenerateSummary: { Task { await state.generateCurrentSummary() } },
-                            onExportMarkdown: { Task { _ = await state.exportCurrentMeeting(target: "markdown") } },
+                            onExportMarkdown: { state.prepareMarkdownExport() },
                             onExportParachute: { Task { _ = await state.exportCurrentMeeting(target: "parachute") } },
                             onSaveSummary: { markdown in save { guard var summary = state.currentSummary else { return }; summary.markdown = markdown; try state.store.saveSummary(summary); state.currentSummary = summary } },
                             isSummarizing: state.isSummarizing,
@@ -113,11 +113,13 @@ struct IOSMeetingDetail: View {
                     if !state.currentUtterances.isEmpty {
                         ShareLink(item: state.currentUtterances.map { "\($0.speakerName): \($0.text)" }.joined(separator: "\n\n"))
                     }
+                    Button("Save Markdown…", systemImage: "doc.badge.arrow.up") { state.prepareMarkdownExport() }
                     Button("Export to Prism", systemImage: "square.and.arrow.up") { Task { _ = await state.exportCurrentMeeting(target: "prism") } }.disabled(!state.prismVerified || state.prismBusy)
                 } label: { Label("Share meeting", systemImage: "square.and.arrow.up") }
 
             }
         }
+        .meetingMarkdownExporter(state: state)
         .confirmationDialog("Regenerate from recording?", isPresented: $confirmingRegeneration, titleVisibility: .visible) {
             Button("Regenerate", role: .destructive) {
                 guard state.currentMeeting?.id == meetingID else { return }

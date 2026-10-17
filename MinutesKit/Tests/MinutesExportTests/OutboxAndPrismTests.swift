@@ -52,6 +52,34 @@ final class MockPrismURLProtocol: URLProtocol, @unchecked Sendable {
 @Suite("Prism & Outbox Tests", .serialized)
 struct OutboxAndPrismTests {
     
+    @Test func customDirectoryPersistsInQueuedPayloadAndRejectsTraversal() throws {
+        let (store, _, _, outbox, path) = try createTestEnvironment()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let original = sampleBundle()
+        try store.saveMeeting(original.meeting)
+        let bundle = MeetingExportBundle(meeting: original.meeting, attendees: original.attendees,
+            clusters: original.clusters, utterances: original.utterances, summary: original.summary,
+            destinationDirectory: "Meetings/Work")
+        let item = try outbox.enqueueNextRevision(bundle: bundle, destinationVault: "staging")
+        let payload = try JSONDecoder().decode(PrismMeetingPayload.self, from: Data(item.payloadJson.utf8))
+        #expect(payload.destinationDirectory == "Meetings/Work")
+        #expect(try outbox.enqueueNextRevision(bundle: bundle, destinationVault: "staging").id == item.id)
+        for invalid in ["", "/absolute", "../private", "a/../b", "a//b", "a/.hidden", "a\\b"] {
+            #expect(throws: (any Error).self) { try PrismExportDirectory.validate(invalid) }
+        }
+    }
+
+    @Test func markdownSaveDocumentMatchesCLIExport() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundle = sampleBundle()
+        let result = try await MarkdownAdapter(outputDirectory: directory.path).export(bundle: bundle)
+        let saved = try String(contentsOfFile: #require(result.pathOrURL), encoding: .utf8)
+        #expect(saved == MarkdownAdapter.render(bundle: bundle))
+        #expect(saved.contains(bundle.utterances[0].text))
+        #expect(saved.contains(bundle.meeting.userNotes!))
+    }
+
     private func createTestEnvironment() throws -> (MinutesStore, URLSession, PrismClient, OutboxManager, String) {
         let tempDb = (NSTemporaryDirectory() as NSString).appendingPathComponent("test_outbox_\(UUID().uuidString).sqlite")
         let store = try MinutesStore(dbPath: tempDb)

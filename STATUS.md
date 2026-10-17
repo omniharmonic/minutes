@@ -265,3 +265,6 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - 2026-10-17 follow-up: iOS47 repairs stale managed audio paths after sandbox relocation on update/restore; original file stays untouched. 358 tests pass, build installed, owner asked to reopen and regenerate (device locked). Mac52 installed with single status text and no redundant Details disclosure.
 
 - 2026-10-17 iOS48: phone47 confirmed 591 saved transcript words; fixed non-converging AI summary reduction and removed automatic extractive substitution. Actual phone-transcript local-model run succeeded (6 bullets / 110 words); 359 tests pass. Installed48; awaiting summary-only verification on phone.
+
+### 2026-10-17 — explicit file export and Prism destinations
+- Implemented native Markdown Save As on Mac/iOS, configurable Prism folder, optional successful-AI-summary export and capability-gated server folder support. Queue payloads retain destination and idempotency identity. Silent Swift regression and 23 Prism integration tests pass; isolated staging upgraded, phone build 50 built (including preventing idle screen timeout during processing). Mac build 53 installed: native Save As and custom-folder staging receipt verified. iPhone Save As, automatic post-summary delivery and manual-lock lifecycle remain to verify.

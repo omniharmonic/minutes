@@ -42,6 +42,8 @@ struct MinutesiOSApp: App {
 
 private struct IOSRootView: View {
     @ObservedObject var state: AppState
+    @Environment(\.scenePhase) private var scenePhase
+    private var processingNeedsScreen: Bool { state.isProcessing || state.isSummarizing || state.isFinalizingRecording }
     @State private var importing = false
     @State private var search = ""
     @State private var recorderPresented = false
@@ -137,6 +139,13 @@ private struct IOSRootView: View {
         .alert("Could not move meeting", isPresented: Binding(get: { folderError != nil }, set: { if !$0 { folderError = nil } })) {
             Button("OK") { folderError = nil }
         } message: { Text(folderError ?? "") }
+        .onChange(of: processingNeedsScreen, initial: true) { _, busy in
+            UIApplication.shared.isIdleTimerDisabled = busy && scenePhase == .active
+        }
+        .onChange(of: scenePhase) { _, phase in
+            UIApplication.shared.isIdleTimerDisabled = processingNeedsScreen && phase == .active
+        }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .task { await state.restoreCalendarConnections() }
         .task { await state.restorePrismConnection() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio, .movie, .plainText]) { result in
@@ -358,6 +367,11 @@ private struct IOSRootView: View {
                     ForEach(state.prismVaults) { vault in Text(vault.name ?? vault.id).tag(vault.id) }
                 }
             }
+                TextField("Folder in vault", text: $state.prismDirectory)
+                Toggle("Automatically export completed meetings", isOn: $state.autoExportPrism)
+                    .disabled(state.prismVaultID.isEmpty)
+                Text("Sends the complete transcript, your notes and a successful AI summary to this vault. Failed processing and transcript highlights are not sent automatically. Each delivery has its own subfolder. Custom folders require an updated Prism server.")
+                    .font(.caption).foregroundStyle(.secondary)
             Text(state.prismMessage).font(.footnote).foregroundStyle(.secondary)
             Button("Connect Prism") { Task { await state.connectPrism() } }.disabled(state.prismBusy)
             if state.canCancelPrismAuthorization {

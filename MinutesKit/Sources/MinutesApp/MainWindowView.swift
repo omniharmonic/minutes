@@ -147,6 +147,7 @@ public struct MainWindowView: View {
             findInTranscript()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("MinutesImportAudio"))) { _ in importing = true }
+        .meetingMarkdownExporter(state: appState)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio, .movie, .plainText]) { result in
             switch result {
             case .success(let url): Task {
@@ -259,7 +260,7 @@ public struct MainWindowView: View {
             HStack(spacing: 8) {
                 Menu {
                     if appState.currentMeeting != nil {
-                        Button("Export Markdown…") { Task { _ = await appState.exportCurrentMeeting(target: "markdown") } }
+                        Button("Export Markdown…") { appState.prepareMarkdownExport() }
                         Button("Send to Parachute") { Task { _ = await appState.exportCurrentMeeting(target: "parachute") } }
                     }
                 } label: {
@@ -672,7 +673,7 @@ public struct MainWindowView: View {
                 onSaveBookmark: { bookmark in perform("save bookmark") { try appState.store.saveBookmark(bookmark); appState.currentBookmarks = appState.store.listBookmarks(meetingId: meeting.id) } },
                 onDeleteBookmark: { id in perform("delete bookmark") { try appState.store.deleteBookmark(id: id); appState.currentBookmarks = appState.store.listBookmarks(meetingId: meeting.id) } },
                 onGenerateSummary: { Task { await appState.generateCurrentSummary() } },
-                onExportMarkdown: { Task { _ = await appState.exportCurrentMeeting(target: "markdown") } },
+                onExportMarkdown: { appState.prepareMarkdownExport() },
                 onExportParachute: { Task { _ = await appState.exportCurrentMeeting(target: "parachute") } },
                 onSaveSummary: { markdown in perform("save summary") { if var summary = appState.currentSummary { summary.markdown = markdown; try appState.store.saveSummary(summary); appState.currentSummary = summary } } }, isSummarizing: appState.isSummarizing,
                 playbackAllowed: !appState.isRecording && !appState.isStartingRecording && !appState.isFinalizingRecording,
@@ -692,7 +693,7 @@ public struct MainWindowView: View {
                 onUtteranceEdited: { utterance in perform("save transcript") { try appState.store.saveUtterances([utterance]); appState.currentUtterances = TranscriptSpeakerLabels.readableUtterances(appState.store.listUtterances(meetingId: meeting.id), clusters: appState.currentClusters) } },
                 onSpeakerReassigned: { id, name in perform("assign speaker") { var utterances = appState.currentUtterances; if let i = utterances.firstIndex(where: { $0.id == id }) { utterances[i].speakerName = name; try appState.store.saveUtterances([utterances[i]]); appState.currentUtterances = utterances } } },
                 onExportParachute: { Task { _ = await appState.exportCurrentMeeting(target: "parachute") } },
-                onExportMarkdown: { Task { _ = await appState.exportCurrentMeeting(target: "markdown") } })
+                onExportMarkdown: { appState.prepareMarkdownExport() })
         case .speakers:
             ReviewSpeakersView(meeting: meeting, clusters: appState.currentClusters, attendees: appState.currentAttendees, utterances: appState.currentUtterances, voiceprints: appState.voiceprints,
                 onAssign: { id, person in perform("assign speaker") { var clusters = appState.currentClusters; if let i = clusters.firstIndex(where: { $0.id == id }) { clusters[i].label = person.displayName; clusters[i].personId = person.id; clusters[i].assignment = "user"; try appState.store.withTransaction { try appState.store.savePerson(person); try appState.store.saveSpeakerClusters(clusters) }; appState.currentClusters = clusters } } },

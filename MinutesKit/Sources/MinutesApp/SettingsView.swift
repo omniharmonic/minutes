@@ -166,6 +166,11 @@ public struct SettingsView: View {
                         ForEach(appState.prismVaults) { vault in Text(vault.name ?? vault.id).tag(vault.id) }
                     }.disabled(appState.prismBusy)
                 }
+                TextField("Folder in vault", text: $appState.prismDirectory)
+                Toggle("Automatically export completed meetings", isOn: $appState.autoExportPrism)
+                    .disabled(appState.prismVaultID.isEmpty)
+                Text("Sends the complete transcript, your notes and a successful AI summary to this vault. Failed processing and transcript highlights are not sent automatically. Each delivery has its own subfolder. Custom folders require an updated Prism server.")
+                    .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button("Connect…") { Task { await appState.connectPrism() } }
                     Button("Verify Connection") { Task { await appState.verifyPrism() } }
@@ -181,7 +186,8 @@ public struct SettingsView: View {
                 if !appState.prismOutbox.isEmpty { deliveries }
             }
             Section("Markdown") {
-                LabeledContent("Export folder") {
+                Text("Save Markdown… opens the system file picker so you choose the name and location every time.").font(.callout).foregroundStyle(.secondary)
+                LabeledContent("CLI default folder") {
                     Text(appState.markdownDirectory.isEmpty ? "Not selected" : URL(fileURLWithPath: appState.markdownDirectory).lastPathComponent)
                         .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         .help(appState.markdownDirectory)

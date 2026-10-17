@@ -1,0 +1,41 @@
+--- a/apps/server/src/routes/minutes.ts
++++ b/apps/server/src/routes/minutes.ts
+@@ -66,6 +66,11 @@
+   identifier = z.string().regex(idPattern);
+ const payloadSchema = z
+   .object({
++    destinationDirectory: z.string().max(240).refine((value) => {
++      const parts = value.split("/");
++      return Buffer.byteLength(value, "utf8") <= 240 && parts.length <= 8 &&
++        parts.every((part) => /^[\p{L}\p{N} _-]+$/u.test(part));
++    }, "Invalid relative destination directory").optional(),
+     schemaVersion: z.literal(1),
+     sourceMeetingId: identifier,
+     sourceRevision: z.number().int().positive().max(2147483647),
+@@ -164,7 +169,7 @@
+     clientId: MINUTES_CLIENT_ID,
+     restricted: true,
+     schemaVersions: [1],
+-    operations: ["meetings:write", "imports:read"],
++    operations: ["meetings:write", "imports:read", "destination:directory"],
+     vaults: [{ id: a.vault.id, name: a.vault.label }],
+   });
+ });
+@@ -312,7 +317,7 @@
+         .join("\n\n") +
+       `\n\n<!-- minutes-schema-v1\n${JSON.stringify(p).replaceAll("--", "\\u002d\\u002d")}\n-->`;
+     const transcript = await client.createNote({
+-      path: `Minutes/${r.id}/transcript.md`,
++      path: `${p.destinationDirectory ?? "Minutes"}/${r.id}/transcript.md`,
+       ifExists: "ignore",
+       tags: ["transcript"],
+       metadata,
+@@ -326,7 +331,7 @@
+     live();
+     const meetingContent = `# ${p.title}\n\nStarted: ${p.startedAt}\nTime zone: ${p.timeZone}\n\n${p.notesMarkdown}\n\n## Summary\n\n${p.summary.markdown}\n\n## Transcript\n\n[[${transcript.id}]]`;
+     const meeting = await client.createNote({
+-      path: `Minutes/${r.id}/meeting.md`,
++      path: `${p.destinationDirectory ?? "Minutes"}/${r.id}/meeting.md`,
+       ifExists: "ignore",
+       tags: ["meeting"],
+       metadata: {

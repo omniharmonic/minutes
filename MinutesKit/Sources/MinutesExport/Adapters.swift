@@ -8,19 +8,22 @@ public struct MeetingExportBundle: Sendable {
     public let clusters: [SpeakerCluster]
     public let utterances: [Utterance]
     public let summary: MeetingSummary?
+    public let destinationDirectory: String?
     
     public init(
         meeting: Meeting,
         attendees: [Person],
         clusters: [SpeakerCluster],
         utterances: [Utterance],
-        summary: MeetingSummary?
+        summary: MeetingSummary?,
+        destinationDirectory: String? = nil
     ) {
         self.meeting = meeting
         self.attendees = attendees
         self.clusters = clusters
         self.utterances = utterances
         self.summary = summary
+        self.destinationDirectory = destinationDirectory
     }
 }
 
@@ -58,17 +61,19 @@ public final class MarkdownAdapter: ExportAdapter {
     }
     
     public func export(bundle: MeetingExportBundle) async throws -> ExportResult {
+        let filename = "minutes-\(exportIdentity(bundle.meeting.id)).md"
+        let outPath = (outputDirectory as NSString).appendingPathComponent(filename)
+        try FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
+        let content = Self.render(bundle: bundle)
+        try content.write(toFile: outPath, atomically: true, encoding: .utf8)
+        return ExportResult(adapterId: Self.id, externalRef: bundle.meeting.id, pathOrURL: outPath, success: true)
+    }
+    /// The same complete document is used by CLI export and native Save As.
+    public static func render(bundle: MeetingExportBundle) -> String {
         let m = bundle.meeting
         let dateFmt = DateFormatter()
         dateFmt.dateFormat = "yyyy-MM-dd"
         let dateStr = dateFmt.string(from: m.startedAt)
-        
-        // File identity follows the meeting, so equal titles do not collide and renames update one file.
-        let filename = "minutes-\(exportIdentity(m.id)).md"
-        let outPath = (outputDirectory as NSString).appendingPathComponent(filename)
-        
-        try FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
-        
         // Front-matter
         var content = "---\n"
         content += "title: \(yamlString(m.title))\n"
@@ -100,9 +105,9 @@ public final class MarkdownAdapter: ExportAdapter {
             }
         }
         
-        try content.write(toFile: outPath, atomically: true, encoding: .utf8)
-        return ExportResult(adapterId: Self.id, externalRef: m.id, pathOrURL: outPath, success: true)
+        return content
     }
+
 }
 
 // MARK: - ParachuteAdapter

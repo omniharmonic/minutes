@@ -111,10 +111,12 @@ public final class AppState: ObservableObject {
     @Published public var prismOrigin = "https://minutes.omniharmonic.com" {
         didSet {
             preferences.set(prismOrigin, forKey: "prismOrigin")
-            if oldValue != prismOrigin { prismOperation += 1; prismAuthorizationTask?.cancel(); prismAuthorizationPending = false; prismBusy = false; prismConnection = nil; prismVerified = false; prismVaults = []; prismOutbox = []; prismMessage = "Server changed. Verify this connection before sending meetings." }
+            if oldValue != prismOrigin { autoExportPrism = false; prismOperation += 1; prismAuthorizationTask?.cancel(); prismAuthorizationPending = false; prismBusy = false; prismConnection = nil; prismVerified = false; prismVaults = []; prismOutbox = []; prismMessage = "Server changed. Verify this connection before sending meetings." }
         }
     }
-    @Published public var prismVaultID = "" { didSet { preferences.set(prismVaultID, forKey: "prismVaultID") } }
+    @Published public var prismVaultID = "" { didSet { preferences.set(prismVaultID, forKey: "prismVaultID"); if oldValue != prismVaultID { autoExportPrism = false } } }
+    @Published public var prismDirectory = "Minutes" { didSet { preferences.set(prismDirectory, forKey: "prismDirectory") } }
+    @Published public var autoExportPrism = false { didSet { preferences.set(autoExportPrism, forKey: "autoExportPrism") } }
     @Published public var prismVerified = false
     @Published public var prismBusy = false
     @Published public var prismMessage = "Prism server setup is pending. Local meetings remain available."
@@ -127,6 +129,18 @@ public final class AppState: ObservableObject {
     private var prismAuthorizationPending = false
     public var canCancelPrismAuthorization: Bool { prismAuthorizationPending }
     private let preferences: UserDefaults
+    @Published public var markdownExportPresented = false
+    @Published public var markdownExportDocument = MeetingMarkdownDocument()
+    @Published public var markdownExportFilename = "Meeting.md"
+    public func prepareMarkdownExport() {
+        guard let meeting = currentMeeting else { return }
+        let bundle = MeetingExportBundle(meeting: meeting, attendees: currentAttendees,
+            clusters: currentClusters, utterances: currentUtterances, summary: currentSummary)
+        markdownExportDocument = MeetingMarkdownDocument(text: MarkdownAdapter.render(bundle: bundle))
+        let title = meeting.title.components(separatedBy: CharacterSet(charactersIn: "/:\\\n\r")).joined(separator: "-")
+        markdownExportFilename = String(title.prefix(120)) + ".md"
+        markdownExportPresented = true
+    }
     @Published public var markdownDirectory: String = "" { didSet { preferences.set(markdownDirectory, forKey: "markdownDirectory") } }
     @Published public var diarizationConfig: DiarizationConfig = DiarizationConfig()
     
@@ -227,6 +241,8 @@ public final class AppState: ObservableObject {
         self.googleCalendarIDs = preferences.string(forKey: "googleCalendarIDs") ?? "primary"
         self.prismOrigin = preferences.string(forKey: "prismOrigin") ?? "https://minutes.omniharmonic.com"
         self.prismVaultID = preferences.string(forKey: "prismVaultID") ?? ""
+        self.prismDirectory = preferences.string(forKey: "prismDirectory") ?? "Minutes"
+        self.autoExportPrism = preferences.bool(forKey: "autoExportPrism")
         self.prismConnection = prismConnection
         let interruptedCount = try self.store.markAbandonedRecordingsInterrupted()
         try self.store.seedStarterFoldersIfNeeded()
@@ -831,6 +847,7 @@ public final class AppState: ObservableObject {
                         ? "Recording and on-device AI draft saved. Review speakers and notes before sharing."
                         : "Recording and transcript highlights saved. Enable Apple Intelligence summaries for an AI draft."
                 }
+                if apple { await automaticallyExportToPrism(meetingID: meetingID) }
             } else {
                 statusMessage = "Recording processed. Changes made while preparing notes were preserved."
             }
@@ -960,7 +977,29 @@ public final class AppState: ObservableObject {
             statusMessage = Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes)
                 ? summary.overview
                 : (apple ? "On-device AI draft saved. Review it before sharing." : "Transcript highlights saved. No AI summary was generated.")
+            if apple { await automaticallyExportToPrism(meetingID: meeting.id) }
         } catch { statusMessage = "Summary failed: \(error.localizedDescription) Your existing notes and transcript are preserved." }
+    }
+
+    /// Called only after a real AI summary is successfully saved. Failures in
+    /// delivery never turn a completed local transcript into a processing error.
+    private func automaticallyExportToPrism(meetingID: String) async {
+        guard autoExportPrism, !prismVaultID.isEmpty,
+              let meeting = store.getMeeting(id: meetingID),
+              !["failed", "interrupted", "recording", "processing"].contains(meeting.status),
+              let summary = store.getSummary(meetingId: meetingID) else { return }
+        let words = store.listUtterances(meetingId: meetingID)
+        guard !words.isEmpty else { return }
+        let bundle = MeetingExportBundle(meeting: meeting,
+            attendees: store.listPeopleForMeeting(meetingId: meetingID), clusters: store.listSpeakerClusters(meetingId: meetingID),
+            utterances: words, summary: summary,
+            destinationDirectory: prismDirectory == "Minutes" ? nil : prismDirectory)
+        do {
+            _ = try await sendToPrism(bundle)
+            prismMessage = "Automatically exported the completed transcript and AI summary."
+        } catch {
+            prismMessage = "Local transcript and AI summary saved. Automatic export needs attention: \(error.localizedDescription)"
+        }
     }
 
     private func configuredPrismConnection() throws -> PrismConnection {
@@ -1062,9 +1101,11 @@ public final class AppState: ObservableObject {
         catch { prismMessage = "Could not cancel delivery: \(error.localizedDescription)" }
     }
     private func sendToPrism(_ bundle: MeetingExportBundle) async throws -> ExportResult {
+        let destinationVault = prismVaultID
+        guard !destinationVault.isEmpty else { throw PrismConnectionError.destinationNotAllowed }
         let connection = try configuredPrismConnection()
         if !prismVerified { try await acceptPrismCapabilities(from: connection) }
-        let item = try await connection.enqueueNextRevision(bundle: bundle, destinationVault: prismVaultID)
+        let item = try await connection.enqueueNextRevision(bundle: bundle, destinationVault: destinationVault)
         prismOutbox = await connection.outboxItems(includeSynced: true)
         statusMessage = "Queued meeting for Prism. Waiting for a committed receipt…"
         _ = try await connection.syncPending()
@@ -1085,7 +1126,8 @@ public final class AppState: ObservableObject {
             attendees: currentAttendees,
             clusters: currentClusters,
             utterances: currentUtterances,
-            summary: currentSummary
+            summary: currentSummary,
+            destinationDirectory: prismDirectory == "Minutes" ? nil : prismDirectory
         )
         
         do {

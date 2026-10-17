@@ -57,6 +57,7 @@ public final class OutboxManager: Sendable {
     }
 
     private func makeItem(bundle: MeetingExportBundle, destinationVault: String, sourceRevision: Int, baseServerRevision: Int?) throws -> OutboxItem {
+        if let directory = bundle.destinationDirectory { try PrismExportDirectory.validate(directory) }
         let isoFmt = ISO8601DateFormatter()
         let startedAtStr = isoFmt.string(from: bundle.meeting.startedAt)
         let endedAtStr: String?
@@ -106,6 +107,7 @@ public final class OutboxManager: Sendable {
         )
         
         let payload = PrismMeetingPayload(
+            destinationDirectory: bundle.destinationDirectory,
             schemaVersion: 1,
             sourceMeetingId: bundle.meeting.id,
             sourceRevision: sourceRevision,
