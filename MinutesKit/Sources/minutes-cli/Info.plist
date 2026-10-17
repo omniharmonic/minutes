@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>ai.nosaas.minutes.cli</string>
+<key>CFBundleName</key><string>Minutes CLI</string>
+<key>NSCalendarsFullAccessUsageDescription</key><string>Minutes reads meetings and invitees from your configured Apple Calendar accounts when you connect Calendar.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Minutes uses Apple Speech for on-device meeting transcription. Unsupported local recognition fails without sending audio to a server.</string>
+<key>NSMicrophoneUsageDescription</key><string>Minutes records your microphone only when you explicitly start microphone or system + microphone recording.</string>
+</dict></plist>

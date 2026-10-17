@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import MinutesCore
 
 public struct MeetingExportBundle: Sendable {
@@ -62,30 +63,36 @@ public final class MarkdownAdapter: ExportAdapter {
         dateFmt.dateFormat = "yyyy-MM-dd"
         let dateStr = dateFmt.string(from: m.startedAt)
         
-        let slug = m.title.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .joined(separator: "-")
-        
-        let filename = "\(dateStr)-\(slug).md"
+        // File identity follows the meeting, so equal titles do not collide and renames update one file.
+        let filename = "minutes-\(exportIdentity(m.id)).md"
         let outPath = (outputDirectory as NSString).appendingPathComponent(filename)
         
         try FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
         
         // Front-matter
         var content = "---\n"
-        content += "title: \"\(m.title)\"\n"
+        content += "title: \(yamlString(m.title))\n"
         content += "date: \(dateStr)\n"
         content += "tags: [meeting]\n"
-        content += "minutes_id: \"\(m.id)\"\n"
+        content += "minutes_id: \(yamlString(m.id))\n"
         if !bundle.attendees.isEmpty {
-            let wikilinks = bundle.attendees.map { "\"([[\($0.displayName)]])\"" }.joined(separator: ", ")
+            let wikilinks = bundle.attendees.map { yamlString("[[\($0.displayName)]]") }.joined(separator: ", ")
             content += "attendees: [\(wikilinks)]\n"
         }
         content += "---\n\n"
         
+        if let notes=m.userNotes, !notes.isEmpty { content += "## Your notes\n\(notes)\n\n" }
         if let summary = bundle.summary {
             content += summary.markdown
+            // Summary content stays concise; exports retain the complete source separately.
+            if !summary.markdown.contains("\n## Transcript\n") && !bundle.utterances.isEmpty {
+                content += "\n\n## Transcript\n\n"
+                for (index, utterance) in bundle.utterances.enumerated() {
+                    let reference = String(format: "T%04d", index + 1)
+                    let timing = m.platform == "transcript_import" ? "untimed" : String(format: "%.3f–%.3f s", utterance.start, utterance.end)
+                    content += "[\(reference)] **\(utterance.speakerName)** (\(timing)): \(utterance.text)\n\n"
+                }
+            }
         } else {
             content += "# \(m.title)\n\n"
             for u in bundle.utterances {
@@ -102,16 +109,19 @@ public final class MarkdownAdapter: ExportAdapter {
 
 public final class ParachuteAdapter: ExportAdapter {
     public static let id = "parachute"
-    public let displayName = "Parachute Vault"
+    public let displayName = "Parachute (legacy macOS CLI export)"
     public let vaultHost: String // e.g. "http://localhost:1940"
     public let vaultName: String // "default"
     public let tokenProvider: @Sendable () -> String?
+    private let session: URLSession
     
     public init(
         vaultHost: String = "http://127.0.0.1:1940",
         vaultName: String = "default",
-        tokenProvider: (@Sendable () -> String?)? = nil
+        tokenProvider: (@Sendable () -> String?)? = nil,
+        session: URLSession? = nil
     ) {
+        self.session = session ?? ExportHTTPTransport.makeSession()
         self.vaultHost = vaultHost
         self.vaultName = vaultName
         self.tokenProvider = tokenProvider ?? { ParachuteAdapter.mintTokenFromCLI() }
@@ -142,6 +152,8 @@ public final class ParachuteAdapter: ExportAdapter {
     }
     
     public func export(bundle: MeetingExportBundle) async throws -> ExportResult {
+        try ExportHTTPTransport.validateOrigin(URL(string:vaultHost))
+        guard vaultName.range(of:"^[A-Za-z0-9_-]+$",options:.regularExpression) != nil else {throw LegacyExportError.invalidDestination}
         guard let token = tokenProvider() else {
             return ExportResult(adapterId: Self.id, success: false, error: "Failed to mint or acquire Parachute token")
         }
@@ -151,22 +163,13 @@ public final class ParachuteAdapter: ExportAdapter {
         dateFmt.dateFormat = "yyyy-MM-dd"
         let dateStr = dateFmt.string(from: m.startedAt)
         
-        let slug = m.title.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .joined(separator: "-")
-        
-        let meetingPath = "vault/meetings/\(dateStr)/\(slug)"
-        
+        let meetingPath = "vault/meetings/minutes-\(exportIdentity(m.id))"
+
         // 1. Ensure Person notes exist for attendees
         var personNoteIds: [String] = []
         for attendee in bundle.attendees {
-            let personSlug = attendee.displayName.lowercased()
-                .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                .filter { !$0.isEmpty }
-                .joined(separator: "-")
-            let personPath = "vault/people/\(personSlug)"
-            
+            let personPath = "vault/people/minutes-\(exportIdentity(attendee.id))"
+
             let personBody: [String: Any] = [
                 "path": personPath,
                 "content": "# \(attendee.displayName)\n\nPerson record for \(attendee.displayName).",
@@ -186,7 +189,9 @@ public final class ParachuteAdapter: ExportAdapter {
         }
         
         // 2. Create Meeting note
-        let markdownContent = bundle.summary?.markdown ?? "# \(m.title)\n\nMeeting transcript and notes."
+        let transcript = bundle.utterances.map { "**\($0.speakerName)**: \($0.text)" }.joined(separator:"\n\n")
+        let userNotes = m.userNotes.map { "## Your notes\n\($0)\n\n" } ?? ""
+        let markdownContent = userNotes + (bundle.summary?.markdown ?? "# \(m.title)\n\n\(transcript)")
         let attendeeNames = bundle.attendees.map { $0.displayName }
         let attendeeEmails = bundle.attendees.flatMap { $0.emails }
         
@@ -204,7 +209,8 @@ public final class ParachuteAdapter: ExportAdapter {
                 "source": "minutes",
                 "minutes_meeting_id": m.id
             ],
-            "if_exists": "ignore"
+            // One-shot legacy export: existing meetings must fail rather than silently ignore edits.
+            "if_exists": "error"
         ]
         
         guard let meetingNoteId = try await postNote(body: meetingBody, token: token) else {
@@ -230,7 +236,7 @@ public final class ParachuteAdapter: ExportAdapter {
     }
     
     private func postNote(body: [String: Any], token: String) async throws -> String? {
-        let url = URL(string: "\(vaultHost)/vault/\(vaultName)/api/notes")!
+        guard let url = URL(string: "\(vaultHost)/vault/\(vaultName)/api/notes") else {throw LegacyExportError.invalidDestination}
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -238,16 +244,13 @@ public final class ParachuteAdapter: ExportAdapter {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, res) = try await URLSession.shared.data(for: req)
+        req.timeoutInterval = 30
+        let (data, res) = try await session.data(for: req)
         guard let httpRes = res as? HTTPURLResponse else {
             return nil
         }
-        guard httpRes.statusCode == 200 || httpRes.statusCode == 201 else {
-            let errStr = String(data: data, encoding: .utf8) ?? ""
-            print("Parachute note creation failed (\(httpRes.statusCode)): \(errStr)")
-            return nil
-        }
-        
+        guard httpRes.statusCode == 200 || httpRes.statusCode == 201 else {throw LegacyExportError.httpStatus(httpRes.statusCode)}
+
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let id = json["id"] as? String {
             return id
@@ -256,7 +259,7 @@ public final class ParachuteAdapter: ExportAdapter {
     }
     
     private func patchNote(id: String, body: [String: Any], token: String) async throws {
-        let url = URL(string: "\(vaultHost)/vault/\(vaultName)/api/notes/\(id)")!
+        guard id.range(of:"^[A-Za-z0-9_-]+$",options:.regularExpression) != nil, let url = URL(string: "\(vaultHost)/vault/\(vaultName)/api/notes/\(id)") else {throw LegacyExportError.invalidDestination}
         var req = URLRequest(url: url)
         req.httpMethod = "PATCH"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -264,6 +267,23 @@ public final class ParachuteAdapter: ExportAdapter {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        _ = try? await URLSession.shared.data(for: req)
+        req.timeoutInterval = 30
+        let (_, response) = try await session.data(for:req)
+        guard let http=response as? HTTPURLResponse else {throw LegacyExportError.invalidResponse}
+        guard (200...299).contains(http.statusCode) else {throw LegacyExportError.httpStatus(http.statusCode)}
+    }
+}
+
+private func exportIdentity(_ value:String)->String {SHA256.hash(data:Data(value.utf8)).map{String(format:"%02x",$0)}.joined()}
+private func yamlString(_ value:String)->String {String(data:(try? JSONEncoder().encode(value)) ?? Data("\"\"".utf8),encoding:.utf8) ?? "\"\""}
+
+public enum LegacyExportError: Error, LocalizedError {
+    case invalidDestination, invalidResponse, httpStatus(Int)
+    public var errorDescription: String? {
+        switch self {
+        case .invalidDestination:return "Invalid export destination. Use HTTPS, or loopback HTTP for local development."
+        case .invalidResponse:return "The legacy vault server returned an invalid response."
+        case .httpStatus(let status):return "Legacy vault export failed (HTTP \(status)); no successful sync was recorded."
+        }
     }
 }

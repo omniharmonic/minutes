@@ -1,19 +1,28 @@
 import Foundation
 import Speech
-import AVFoundation
+import os
 
 public enum ASRError: Error, LocalizedError {
     case recognizerUnavailable(String)
     case authorizationDenied
+    case missingUsageDescription
+    case consentNeedsNormalAppLaunch
     case transcriptionFailed(String)
+    case noSpeechDetected
     case audioUnreadable(String)
     
     public var errorDescription: String? {
         switch self {
         case .recognizerUnavailable(let msg):
             return "Speech recognizer unavailable: \(msg)"
+        case .consentNeedsNormalAppLaunch:
+            return "Open Minutes.app normally from Finder, then use Start Recording to grant Speech Recognition access. A direct command-line launch cannot request this permission safely. No recording has started."
+        case .missingUsageDescription:
+            return "This Minutes build is missing its Speech Recognition privacy description. Reopen the packaged Minutes app or install the rebuilt app; your audio is preserved."
         case .authorizationDenied:
             return "Speech recognition permission denied by user or system policy"
+        case .noSpeechDetected:
+            return "No speech was recognized in this audio window."
         case .transcriptionFailed(let msg):
             return "Audio transcription failed: \(msg)"
         case .audioUnreadable(let msg):
@@ -44,41 +53,89 @@ public final class ASRService: Sendable {
             throw ASRError.audioUnreadable("Audio file is 0 bytes")
         }
         
-        // Attempt Apple Speech on-device recognition
+        if fallbackTranscriptURL != nil {
+            throw ASRError.transcriptionFailed("Plain text has no verified audio timestamps. Use minutes-cli import-transcript to import it without timing.")
+        }
         if let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable {
-            do {
-                let words = try await performRecognition(recognizer: recognizer, audioURL: audioURL)
-                return words
-            } catch {
-                // If on-device recognizer failed, check if fallback transcript was provided
-                if let fallbackURL = fallbackTranscriptURL, FileManager.default.fileExists(atPath: fallbackURL.path) {
-                    return try parseTranscriptFile(url: fallbackURL, audioURL: audioURL)
-                }
-                throw error
-            }
+            return try await performRecognition(recognizer: recognizer, audioURL: audioURL)
         }
-        
-        // If Speech framework recognizer is not available on this machine (e.g. headless CI):
-        if let fallbackURL = fallbackTranscriptURL, FileManager.default.fileExists(atPath: fallbackURL.path) {
-            return try parseTranscriptFile(url: fallbackURL, audioURL: audioURL)
-        }
-        
+
         throw ASRError.recognizerUnavailable("SFSpeechRecognizer not available for locale \(locale.identifier)")
     }
     
-    private func performRecognition(recognizer: SFSpeechRecognizer, audioURL: URL) async throws -> [ASRWord] {
+    public static func validateConsentLaunch(isAppBundle: Bool, parentPID: Int32) throws {
+        guard isAppBundle && parentPID == 1 else { throw ASRError.consentNeedsNormalAppLaunch }
+    }
+
+    public static func validateSpeechUsageDescription(_ description: String?) throws {
+        guard let description, !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ASRError.missingUsageDescription
+        }
+    }
+
+    /// Explicit setup preflight. This never starts recording or uploads audio.
+    public func prepareForRecording() async throws {
+        try Self.validateSpeechUsageDescription(Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") as? String)
+        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            #if os(macOS)
+            // TCC attributes direct child processes to their hosting app, even
+            // when both Mach-O and Bundle.main have valid usage descriptions.
+            // Request consent only from a normally LaunchServices-launched app.
+            try Self.validateConsentLaunch(isAppBundle: Bundle.main.bundleURL.pathExtension == "app", parentPID: getppid())
+            #endif
+        }
+        try await Self.requireAuthorization {
+            if SFSpeechRecognizer.authorizationStatus() == .authorized { return true }
+            guard SFSpeechRecognizer.authorizationStatus() == .notDetermined else { return false }
+            return await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in continuation.resume(returning: status == .authorized) }
+            }
+        }
+        guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
+            throw ASRError.recognizerUnavailable("Install/enable on-device speech recognition for \(locale.identifier) in macOS/iOS settings before recording.")
+        }
+    }
+
+    // Fail closed: unsupported local speech must never send meeting audio to Apple.
+    static func localRecognitionRequest(audioURL: URL, supportsOnDeviceRecognition: Bool) throws -> SFSpeechURLRecognitionRequest {
+        guard supportsOnDeviceRecognition else {
+            throw ASRError.recognizerUnavailable("On-device recognition is unsupported for this locale or device")
+        }
         let request = SFSpeechURLRecognitionRequest(url: audioURL)
         request.shouldReportPartialResults = false
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
-        }
-        
+        request.requiresOnDeviceRecognition = true
+        return request
+    }
+
+    static func requireAuthorization(_ authorize: @Sendable () async -> Bool) async throws {
+        guard await authorize() else { throw ASRError.authorizationDenied }
+    }
+
+    static func classifyRecognitionError(_ error: NSError) -> ASRError {
+        // Assistant error numbers are not a stable public contract. Keep the
+        // observed compatibility case exact and log only domain/code so future
+        // OS behavior can be verified without recording speech or error userInfo.
+        Logger(subsystem: "app.minutes", category: "SpeechRecognition").error(
+            "Recognition failure domain=\(error.domain, privacy: .public) code=\(error.code, privacy: .public)")
+        if error.domain == "kAFAssistantErrorDomain", error.code == 1110 { return .noSpeechDetected }
+        return .transcriptionFailed(error.localizedDescription)
+    }
+
+    private func performRecognition(recognizer: SFSpeechRecognizer, audioURL: URL) async throws -> [ASRWord] {
+        try Self.validateSpeechUsageDescription(Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") as? String)
+        let request = try Self.localRecognitionRequest(
+            audioURL: audioURL, supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
+        // Batch processing must never trigger a privacy prompt after recording.
+        // Preflight obtains consent before capture; denied/missing consent keeps
+        // the saved file available for retry instead of asking TCC from a worker.
+        try await Self.requireAuthorization { SFSpeechRecognizer.authorizationStatus() == .authorized }
+
         let state = AtomicRecognitionState()
         
         return try await withCheckedThrowingContinuation { continuation in
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error = error {
-                    state.resumeOnce(throwing: ASRError.transcriptionFailed(error.localizedDescription), continuation: continuation)
+                    state.resumeOnce(throwing: Self.classifyRecognitionError(error as NSError), continuation: continuation)
                     return
                 }
                 
@@ -104,34 +161,6 @@ public final class ASRService: Sendable {
         }
     }
     
-    private func parseTranscriptFile(url: URL, audioURL: URL) throws -> [ASRWord] {
-        let text = try String(contentsOf: url, encoding: .utf8)
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return []
-        }
-        
-        // Measure audio duration to pace words accurately
-        var audioDuration = 10.0
-        if let audioFile = try? AVAudioFile(forReading: audioURL) {
-            audioDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
-        }
-        
-        let rawTokens = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        guard !rawTokens.isEmpty else { return [] }
-        
-        let avgDuration = min(0.6, max(0.15, audioDuration / Double(rawTokens.count)))
-        var words: [ASRWord] = []
-        var t = 0.2
-        for tok in rawTokens {
-            let dur = Double(tok.count) * 0.05 + 0.12
-            let wDur = min(avgDuration, dur)
-            words.append(ASRWord(word: tok, start: t, end: t + wDur, confidence: 0.95))
-            t += wDur + 0.04
-        }
-        
-        return words
-    }
 }
 
 final class AtomicRecognitionState: @unchecked Sendable {

@@ -1,0 +1,32 @@
+{
+  "build": 37,
+  "meetingID": "f1393b8a-b995-42f2-bd5c-dea7967a8ff8",
+  "status": "needs_review",
+  "captureCompleted": true,
+  "captureIssues": [],
+  "sources": [
+    "system"
+  ],
+  "microphoneFiles": 0,
+  "stimulusOutput": "BlackHole virtual output only",
+  "systemOutputChanged": false,
+  "durationSeconds": 362.77999999999884,
+  "sourceDurationSeconds": 354.6483125,
+  "firstTurnCorrelation": 0.9991670432531589,
+  "lastTurnCorrelation": 0.9904657096251621,
+  "stimulusOffsetSeconds": 2.8625000000000007,
+  "startToEndOffsetDriftSeconds": -6.250000000207478e-05,
+  "systemUtterances": 19,
+  "systemClusters": 3,
+  "turnsCovered": 18,
+  "turnsExpected": 18,
+  "recognizedSpeakerTimeAccuracy": 0.9915287224108688,
+  "turnDominantSpeakerMatches": 18,
+  "referenceWords": 810,
+  "recognizedSystemWords": 781,
+  "normalizedWER": 0.06296296296296296,
+  "summaryCount": 1,
+  "limits": "Generated voices without overlap; source-only WER, recognized utterance speaker-time matching is not benchmark DER; no known-person identity claim.",
+  "onDeviceAIDraft": true,
+  "extractiveFallback": false
+}

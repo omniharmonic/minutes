@@ -1,37 +1,81 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
+/// Adaptive system colors keep meeting content legible in light, dark and increased contrast.
 public enum MinutesTheme {
-    public static let bg = Color(red: 11/255, green: 13/255, blue: 19/255) // #0b0d13
-    public static let card = Color(red: 19/255, green: 23/255, blue: 34/255) // #131722
-    public static let cardHover = Color(red: 26/255, green: 32/255, blue: 48/255) // #1a2030
-    public static let border = Color(red: 35/255, green: 42/255, blue: 61/255) // #232a3d
-    public static let primary = Color(red: 99/255, green: 102/255, blue: 241/255) // #6366f1
-    public static let primaryHover = Color(red: 79/255, green: 70/255, blue: 229/255) // #4f46e5
-    public static let emerald = Color(red: 16/255, green: 185/255, blue: 129/255) // #10b981
-    public static let emeraldBg = Color(red: 16/255, green: 185/255, blue: 129/255, opacity: 0.12)
-    public static let purple = Color(red: 168/255, green: 85/255, blue: 247/255) // #a855f7
-    public static let blue = Color(red: 59/255, green: 130/255, blue: 246/255) // #3b82f6
-    public static let text = Color(red: 241/255, green: 245/255, blue: 249/255) // #f1f5f9
-    public static let muted = Color(red: 148/255, green: 163/255, blue: 184/255) // #94a3b8
+    #if os(macOS)
+    public static let bg = Color(nsColor: .windowBackgroundColor)
+    public static let document = Color(nsColor: .textBackgroundColor)
+    public static let card = Color(nsColor: .controlBackgroundColor)
+    public static let cardHover = Color(nsColor: .quaternaryLabelColor).opacity(0.3)
+    #else
+    public static let bg = Color(uiColor: .systemGroupedBackground)
+    public static let document = Color(uiColor: .systemBackground)
+    public static let card = Color(uiColor: .secondarySystemGroupedBackground)
+    public static let cardHover = Color(uiColor: .tertiarySystemFill)
+    #endif
+    public static let border = Color.primary.opacity(0.09)
+    public static let primary = Color.accentColor
+    public static let primaryHover = Color.accentColor
+    public static let emerald = Color.green
+    public static let emeraldBg = Color.green.opacity(0.10)
+    public static let purple = Color.secondary
+    public static let blue = Color.blue
+    public static let text = Color.primary
+    public static let muted = Color.secondary
 }
 
 public struct CardModifier: ViewModifier {
     public init() {}
     public func body(content: Content) -> some View {
-        content
-            .background(MinutesTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(MinutesTheme.border, lineWidth: 1)
-            )
+        content.background(MinutesTheme.card, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(MinutesTheme.border))
     }
 }
 
+/// Glass belongs to navigation and controls. Transcript and note surfaces stay opaque.
+private struct MinutesGlassModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(MinutesTheme.card, in: RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(MinutesTheme.border))
+        } else if #available(macOS 26, iOS 26, *) {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.14)))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+}
+/// Native optical material for a deliberately shaped control or navigation surface.
+/// Content surfaces continue to use the opaque document color.
+private struct MinutesControlGlass<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let interactive: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(MinutesTheme.card, in: shape)
+                .overlay(shape.strokeBorder(MinutesTheme.border))
+        } else if #available(macOS 26, iOS 26, *) {
+            // Keep a real material floor and quiet edge even when the window
+            // is inactive and the platform attenuates its optical glass effect.
+            content.background(.ultraThinMaterial, in: shape)
+                .glassEffect(.regular.interactive(interactive), in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.16)))
+        } else {
+            content.background(.regularMaterial, in: shape)
+                .overlay(shape.strokeBorder(MinutesTheme.border))
+        }
+    }
+}
 public extension View {
-    func minutesCard() -> some View {
-        modifier(CardModifier())
+    func minutesCard() -> some View { modifier(CardModifier()) }
+    func minutesGlass() -> some View { modifier(MinutesGlassModifier()) }
+    func minutesControlGlass<S: InsettableShape>(in shape: S, interactive: Bool = false) -> some View {
+        modifier(MinutesControlGlass(shape: shape, interactive: interactive))
     }
 }
 #endif

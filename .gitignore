@@ -4,3 +4,18 @@ build/
 *.xcworkspace
 .DS_Store
 *.db
+
+# Local diagnostics, recordings and credentials
+audit/*.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+*.wav
+*.caf
+*.m4a
+*.p12
+*.p8
+.env
+.env.*

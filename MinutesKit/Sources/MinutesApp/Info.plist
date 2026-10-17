@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Minutes</string>
+	<key>CFBundleExecutable</key>
+	<string>Minutes</string>
+	<key>CFBundleIconFile</key>
+	<string>Minutes.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.nosaas.minutes</string>
+	<key>CFBundleName</key>
+	<string>Minutes</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Minutes authentication</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>minutes</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>40</string>
+	<key>GoogleDesktopClientID</key>
+	<string>618880165655-s4ct030bbuqbti3cqlkt6jsdtqf77lve.apps.googleusercontent.com</string>
+	<key>GoogleIOSClientID</key>
+	<string>618880165655-h7cgl66bg5i3539cv8npvthhp9i53uhk.apps.googleusercontent.com</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>MinutesBuildLabel</key>
+	<string>Glass recording and automatic notes</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Minutes records call audio when you choose Mac call audio and start recording. Screen images are not saved.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Minutes reads meetings and invited participants from accounts configured in Apple Calendar when you connect Calendar.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Minutes requires microphone access to record meetings for local transcription and diarization.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Minutes uses Apple Speech for on-device meeting transcription. Unsupported local recognition fails without sending audio to a server.</string>
+</dict>
+</plist>

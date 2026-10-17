@@ -20,7 +20,8 @@ public struct DiarizationResult: Sendable {
     }
 }
 
-public final class DiarizationService: Sendable {
+/// Experimental spectral segmentation utility; never used by the production pipeline.
+public final class ExperimentalSpectralDiarizer: Sendable {
     public init() {}
     
     /// Performs Voice Activity Detection, acoustic segmentation, and speaker clustering on audio samples.
@@ -142,7 +143,7 @@ public final class DiarizationService: Sendable {
                 let segSampleEnd = min(samples.count, currentEnd * frameSize)
                 let segSamples = Array(samples[segSampleStart..<segSampleEnd])
                 
-                let emb = EmbeddingService.extractEmbedding(samples: segSamples, sampleRate: sampleRate)
+                let emb = ExperimentalSpectralEmbedding.extractEmbedding(samples: segSamples, sampleRate: sampleRate)
                 segmentItems.append(SegmentItem(startSec: sStart, endSec: sEnd, embedding: emb))
                 totalSpeechDuration += (sEnd - sStart)
                 
@@ -182,14 +183,14 @@ public final class DiarizationService: Sendable {
                 let newWeight = Float(segDuration)
                 let totalWeight = oldWeight + newWeight
                 
-                var newCentroid = [Float](repeating: 0.0, count: EmbeddingService.embeddingDimension)
-                for d in 0..<EmbeddingService.embeddingDimension {
+                var newCentroid = [Float](repeating: 0.0, count: ExperimentalSpectralEmbedding.embeddingDimension)
+                for d in 0..<ExperimentalSpectralEmbedding.embeddingDimension {
                     newCentroid[d] = (clusterStates[bIdx].centroid[d] * oldWeight + item.embedding[d] * newWeight) / max(1e-6, totalWeight)
                 }
                 // Normalize
                 let norm = sqrt(newCentroid.map { $0 * $0 }.reduce(0, +))
                 if norm > 1e-9 {
-                    for d in 0..<EmbeddingService.embeddingDimension {
+                    for d in 0..<ExperimentalSpectralEmbedding.embeddingDimension {
                         newCentroid[d] /= norm
                     }
                 }
@@ -249,8 +250,8 @@ public final class DiarizationService: Sendable {
                 label: c.label,
                 centroid: c.centroid,
                 speechSeconds: c.speechSeconds,
-                assignment: "suggested",
-                confidence: 0.85
+                assignment: "unassigned",
+                confidence: 0.0
             )
         }
         
@@ -274,5 +275,70 @@ public final class DiarizationService: Sendable {
         }
         let denom = sqrt(normA) * sqrt(normB)
         return denom > 1e-9 ? (dot / denom) : 0.0
+    }
+}
+
+/// Converts trained model output into meeting-scoped clusters without asserting
+/// calibrated confidence or automatically attaching a person's identity.
+public final class DiarizationService: Sendable {
+    public static let embeddingModelID = SpeakerEmbeddingModel.trainedID
+    private let backend: any SpeakerDiarizationBackend
+
+    public init(backend: any SpeakerDiarizationBackend = FluidDiarizationBackend()) {
+        self.backend = backend
+    }
+
+    public func diarize(samples: [Float], sampleRate: Double = 16_000,
+                        meetingId: String, trackId: String = "track_1",
+                        config: DiarizationConfig = DiarizationConfig()) async throws -> DiarizationResult {
+        guard sampleRate == 16_000, samples.allSatisfy(\.isFinite),
+              config.minSpeechDuration.isFinite, config.minSpeechDuration > 0,
+              config.pauseThreshold.isFinite, config.pauseThreshold > 0 else {
+            throw SpeechModelsError.invalidAudio
+        }
+        let duration = Double(samples.count) / sampleRate
+        let output = try await backend.diarize(samples: samples, config: config)
+        var segments: [TimedSpeakerSegment] = []
+        var vectors: [String: [Float]] = [:]
+        var seconds: [String: Double] = [:]
+        var identifiers: [String: String] = [:]
+        for item in output.sorted(by: { $0.start < $1.start }) {
+            guard !item.speakerID.isEmpty, item.start.isFinite, item.end.isFinite,
+                  item.start >= 0, item.end > item.start, item.embedding.count == 256,
+                  item.embedding.allSatisfy(\.isFinite),
+                  item.embedding.contains(where: { $0 != 0 }) else {
+                throw SpeechModelsError.invalidDiarizationOutput
+            }
+            // The SDK pads its final window. Never save segments past the file.
+            let end = min(duration, item.end)
+            guard item.start < end else { continue }
+            let id = identifiers[item.speakerID] ?? "c_\(meetingId)_\(identifiers.count + 1)"
+            identifiers[item.speakerID] = id
+            let weight = end - item.start
+            var sum = vectors[id] ?? Array(repeating: 0, count: 256)
+            for index in sum.indices { sum[index] += item.embedding[index] * Float(weight) }
+            vectors[id] = sum
+            seconds[id, default: 0] += weight
+            segments.append(TimedSpeakerSegment(speakerId: id, start: item.start,
+                                                end: end, embedding: item.embedding))
+        }
+        let clusters = try identifiers.values.sorted().enumerated().map { index, id in
+            var vector = vectors[id] ?? []
+            let norm = sqrt(vector.reduce(Float(0)) { $0 + $1 * $1 })
+            guard norm.isFinite, norm > 0 else { throw SpeechModelsError.invalidDiarizationOutput }
+            for i in vector.indices { vector[i] /= norm }
+            return SpeakerCluster(id: id, meetingId: meetingId, trackId: trackId,
+                                  label: "Speaker \(index + 1)", centroid: vector,
+                                  speechSeconds: seconds[id] ?? 0, assignment: "unassigned",
+                                  confidence: 0, embeddingModel: Self.embeddingModelID)
+        }
+        var speechDuration = 0.0
+        var unionEnd = 0.0
+        for segment in segments {
+            speechDuration += max(0, segment.end - max(unionEnd, segment.start))
+            unionEnd = max(unionEnd, segment.end)
+        }
+        return DiarizationResult(segments: segments, clusters: clusters,
+                                 speechDuration: speechDuration, totalDuration: duration)
     }
 }

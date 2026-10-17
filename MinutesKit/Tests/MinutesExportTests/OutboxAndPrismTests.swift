@@ -166,7 +166,7 @@ struct OutboxAndPrismTests {
             return (res, Data(json.utf8))
         }
         
-        let processed = await outbox.processPending()
+        let processed = try await outbox.processPending()
         #expect(processed.count == 1)
         #expect(processed[0].status == .synced)
         #expect(processed[0].receipt?.importId == "imp-9988")
@@ -192,7 +192,7 @@ struct OutboxAndPrismTests {
             return (res, Data("{\"error\": \"Database locked\"}".utf8))
         }
         
-        let processed = await outbox.processPending()
+        let processed = try await outbox.processPending()
         #expect(processed.count == 1)
         #expect(processed[0].status == .failedRetryable)
         #expect(processed[0].retryCount == 1)
@@ -217,7 +217,7 @@ struct OutboxAndPrismTests {
             return (res, Data("{\"error\": \"Conflict\", \"serverRevision\": 4}".utf8))
         }
         
-        let processed = await outbox.processPending()
+        let processed = try await outbox.processPending()
         #expect(processed.count == 1)
         #expect(processed[0].status == .conflict)
         #expect(processed[0].errorMessage?.contains("Conflict") == true)
@@ -240,7 +240,7 @@ struct OutboxAndPrismTests {
             return (res, Data("{\"error\": \"Token expired\"}".utf8))
         }
         
-        let processed = await outbox.processPending()
+        let processed = try await outbox.processPending()
         #expect(processed.count == 1)
         #expect(processed[0].status == .needsSignIn)
         
@@ -262,7 +262,7 @@ struct OutboxAndPrismTests {
             return (res, Data("{\"error\": \"Vault access denied\"}".utf8))
         }
         
-        let processed = await outbox.processPending()
+        let processed = try await outbox.processPending()
         #expect(processed.count == 1)
         #expect(processed[0].status == .forbidden)
         
@@ -286,4 +286,61 @@ struct OutboxAndPrismTests {
         let items = store.listOutboxItems(meetingId: bundle.meeting.id, status: nil)
         #expect(items.count == 1)
     }
+    @Test("Edited transcript text is never deduplicated by unchanged utterance count")
+    func editedTranscriptGetsNewKey() throws {
+        let (store, _, _, outbox, dbPath) = try createTestEnvironment()
+        defer { try? FileManager.default.removeItem(atPath: dbPath) }
+        let bundle = sampleBundle()
+        try store.saveMeeting(bundle.meeting)
+        let first = try outbox.enqueue(bundle: bundle, destinationVault: "default")
+        var utterances = bundle.utterances
+        utterances[0].text = "Corrected transcript content"
+        let edited = MeetingExportBundle(meeting: bundle.meeting, attendees: bundle.attendees,
+            clusters: bundle.clusters, utterances: utterances, summary: bundle.summary)
+        let second = try outbox.enqueue(bundle: edited, destinationVault: "default")
+        #expect(first.id != second.id)
+        #expect(first.idempotencyKey != second.idempotencyKey)
+    }
+
+    @Test("Separate destination vaults have independent durable deliveries")
+    func separateVaultsGetSeparateDeliveries() throws {
+        let (store, _, _, outbox, dbPath) = try createTestEnvironment()
+        defer { try? FileManager.default.removeItem(atPath: dbPath) }
+        let bundle = sampleBundle()
+        try store.saveMeeting(bundle.meeting)
+        let first = try outbox.enqueue(bundle: bundle, destinationVault: "one")
+        let second = try outbox.enqueue(bundle: bundle, destinationVault: "two")
+        #expect(first.id != second.id)
+        #expect(second.destinationVault == "two")
+    }
+
+    @Test("Unassigned speakers are not exported as confirmed person identities")
+    func unassignedSpeakerRemainsUnassigned() throws {
+        let (store, _, _, outbox, dbPath) = try createTestEnvironment()
+        defer { try? FileManager.default.removeItem(atPath: dbPath) }
+        let bundle = sampleBundle()
+        try store.saveMeeting(bundle.meeting)
+        let item = try outbox.enqueue(bundle: bundle, destinationVault: "default")
+        let payload = try JSONDecoder().decode(PrismMeetingPayload.self, from: Data(item.payloadJson.utf8))
+        #expect(payload.utterances[0].speakerPersonId == nil)
+        #expect(payload.utterances[0].assignment == "unassigned")
+        #expect(payload.people[0].attendance == "invited")
+    }
+
+    @Test("HTTP 202 acceptance does not claim committed sync")
+    func pendingResponseIsNotSynced() async throws {
+        let (store, _, _, outbox, dbPath) = try createTestEnvironment()
+        defer { try? FileManager.default.removeItem(atPath: dbPath) }
+        let bundle = sampleBundle()
+        try store.saveMeeting(bundle.meeting)
+        let item = try outbox.enqueue(bundle: bundle, destinationVault: "default")
+        MockPrismURLProtocol.requestHandler = { req in
+            let response = HTTPURLResponse(url: req.url!, statusCode: 202, httpVersion: nil, headerFields: [:])!
+            return (response, Data(#"{"status":"pending","importId":"imp-pending"}"#.utf8))
+        }
+        let processed = try await outbox.processPending()
+        #expect(processed.first?.status == .awaitingReceipt)
+        #expect(store.getOutboxItem(id: item.id)?.receipt == nil)
+    }
+
 }

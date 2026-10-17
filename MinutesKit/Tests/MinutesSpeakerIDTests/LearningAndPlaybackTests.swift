@@ -87,7 +87,7 @@ struct LearningAndPlaybackTests {
             speechSeconds: 20.0
         )
         
-        let matcher = SpeakerMatcher()
+        let matcher = SpeakerMatcher(requiredModel: nil, allowAutomaticAssignment: true, minimumMargin: 0)
         let matchResults = matcher.match(
             clusters: [newCluster],
             people: [person],

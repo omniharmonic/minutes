@@ -1,73 +1,191 @@
-# Minutes: Status & Milestone Roadmap
+# Minutes: implementation status
 
-Status Definitions:
-- `[x] VERIFIED`: Implemented, verified with unit/integration tests, and free of synthetic/mocked production fallbacks.
-- `[~] IN PROGRESS`: Active implementation gate.
-- `[ ] PLANNED`: Contract defined; device/external validation pending.
-- `[!] BLOCKED`: External dependency or owner-dependent release input (e.g. Apple Team ID).
+Updated 2026-10-15 after integrated native repairs and initial physical iPhone deployment. Earlier “100% Complete” milestone labels overstated delivery. Compilation and synthetic/unit fixtures do not establish microphone reliability, speaker recognition accuracy, iOS background recording, live Prism compatibility, clean-install validation, or release readiness.
 
----
+- `[x]` implemented and checked within the evidence stated below.
+- `[~]` partially implemented; required integration or acceptance work remains.
+- `[ ]` missing or not demonstrated.
+- `[!]` requires owner credentials or physical-device release validation.
 
-## Milestone Execution Matrix (Audit 2026-10-14 Framework)
+## 2026-10-16 identity and invitation review
 
-### Gate G0: Truth, Safety & Test Isolation (100% Complete)
-- [x] **G0.1 Fabricated Extractive Fallback Removed**: Deleted fabricated decision and action-item strings in `Summarizer.swift`. Fallback is strictly factual.
-- [x] **G0.2 Acoustic Similarity Floor & Clamping**: `Matcher.swift` enforces minimum acoustic similarity floor (`maxSim >= 0.40`) before calendar bonus and clamps `effectiveScore` to `[0.0, 1.0]`.
-- [x] **G0.3 SQLite Meeting Isolation**: `Store.swift` upsert preserves meeting/track boundaries (`ON CONFLICT DO UPDATE SET meeting_id, track_id`).
-- [x] **G0.4 Scoped Attendees**: `Store.swift` and `AppState.swift` scope attendees per meeting via `listPeopleForMeeting(meetingId:)` rather than returning all database records.
-- [x] **G0.5 Fake UTTERANCES & Synthetic Vectors Removed**: `stopAndProcessMeeting()` no longer injects random 256-dim vectors or canned text. Demo preview is isolated to `loadDemoMeetingFixture()`.
-- [x] **G0.6 Audio Validation in CLI and App**: `minutes-cli` and `LiveIngestionView.swift` validate non-empty audio files and report errors instead of attempting UTF-8 string decoding fallback.
-- [x] **G0.7 Isolated Test Storage**: Tests use disposable temporary database directories, never touching personal `~/Library/Application Support/Minutes`.
-- **Exit Evidence**: All 32 baseline tests pass cleanly; invalid audio inputs fail truthfully; root test suite isolated. **Commit: `3555554`**
+- [x] Repair duplicate calendar self/name/RSVP context and retain invitation response through binding and SQLite reopen, using an additive migration and historical JSON compatibility.
+- [x] Display RSVP as invitation context, distinguish remembered/unconfirmed speaker matches from confirmed names, and remove the claim that suggested invitees are present.
+- [x] Reverify installed trained-model voice enrollment → persistence/reopen → independent automatic reuse for two generated voices, with wrong-person attendee rejection. 47 targeted model-free tests plus the real-model acceptance passed; full sandbox speech-suite run stalled and was terminated, not counted as passing.
+- [ ] Real-human recognition accuracy, overlapping/noisy calls and cross-device voice profile sync remain unverified. No install, live recording/playback or personal calendar actions in this audit.
 
----
+2026-10-16: Details, evidence paths and exact test commands: `audit/identity-calendar-review-2026-10-16.md`.
 
-### Gate M1: Real Speech, Diarization & Pipeline Feasibility (100% Complete)
-- [x] **M1.1 CoreAudio Resampling & Audio Engine**: `AudioCaptureService` captures native input and streams 16kHz mono PCM directly to disk with live RMS metering.
-- [x] **M1.2 Accelerate FFT & Acoustic Embeddings**: Extracted 32 log-mel filterbank MFCC features with 256-dimensional L2-normalized embeddings via Apple Accelerate vDSP.
-- [x] **M1.3 Hierarchical Agglomerative Clustering**: Complete agglomerative diarization pipeline clustering acoustic speech segments by cosine distance without artificial perturbations.
-- [x] **M1.4 Audio Path Schema Migration**: `Store.swift` migration version 2 adds `audio_path` column to SQLite `meeting` table with transactional rollback.
-- **Exit Evidence**: Real WAV files yield acoustic vectors; diarization clusters real speech segments; 44 unit tests pass. **Commit: `538e6c8`**
+## 2026-10-15 source 31: desktop audio / folder repair
 
----
+- [x] Strong nonempty PCM verified in the owner's reported 74.65-second system recording; capture and transcription failure are now distinguished. Numeric-only diagnostics; no transcript or voice-vector logging.
+- [x] Recognition's exact no-speech-window response no longer aborts later windows and bounded retries. Other errors and missing substantial-speech coverage still fail visibly.
+- [x] Saved-audio player is visible without transcript; playback is guarded during capture across saved audio, transcript and speaker samples.
+- [x] One-time Work/Personal/Learning starter folders preserve custom libraries and deleted-starter choices. Native drag transport replaced with label-level item providers, batch validation and atomic filing; source no longer scrolls on pointer selection.
+- [x] Full regression: 297 reported tests passed (configured optional skips); physical iPhone 31 compiled; Mac 31 Developer ID package/signature verified.
+- [~] Mac locked before native idle/quit/install and actual drag/saved-audio/capture acceptance. Installed Mac 30 left untouched. Build 31 is locally signed, not notarized; Minutes-Notary profile remains unavailable. iPhone 31 is compiled, not installed.
+- [ ] iOS device-audio adapter: Apple iOS 27 ScreenCaptureKit research establishes a possible media-capture path, but current iPhone app remains microphone-only and another app's live call audio is unsupported.
 
-### Gate M2: Trustworthy Capture & Confirmed Learning (100% Complete)
-- [x] **M2.1 AudioPlaybackService**: Real slice playback (`play(from:to:)`), seek, pause, and timestamp tracking for review and note-taking.
-- [x] **M2.2 Bookmark & Notes View**: Two-column layout with real `userNotes` autosave, timestamped bookmarks with playback seek, grounded summary sections, and export buttons.
-- [x] **M2.3 Speaker Review Dashboard**: Exact match to `mockups/review.png` with real waveform rendering, clip playback, candidate person selector/creator, and opt-in "Learn from this confirmed voice".
-- [x] **M2.4 Natural Centroid Derivation**: Removed artificial `±0.02` perturbation in `ClusterManager.swift`; sub-centroids derive strictly from normalized acoustic vectors.
-- [x] **M2.5 SQLite Bookmark Schema & CRUD**: Added `bookmark` table migration and CRUD (`saveBookmark`, `listBookmarks`, `deleteBookmark`).
-- **Exit Evidence**: 44 tests pass across 5 test suites; speaker learning and acoustic centroids verified. **Commit: `57167c5`**
+## Folders and on-device filing (2026-10-15)
 
----
+- [x] Notes-style Upcoming/People group, separate local meeting folders/counts, folder creation/edit/removal, scoped libraries, Move menus and drag/drop targets on Mac/iOS. Folder deletion preserves meetings; multi-note moves are atomic.
+- [x] Native installed sentence embeddings compare every folder and manual examples. Weak/ambiguous matches abstain. Actual fictional local-model and CLI checks passed; manual choices and async edits are protected.
+- [x] Integrated suite reports 286 passing tests with gated live/model checks skipped by default; iPhone build 30 compiled/signed/installed; launch was blocked by the locked phone and needs the owner to open it.
+- [~] Physical folder interaction/visual acceptance still pending. Mac 30 Developer ID signing passed, but notarization profile is unavailable; Mac 30 is installed locally with verified Developer ID signing (not notarized); release notarization awaits owner credential restoration. Native drag did not commit a move in build 30 and is being repaired in source 31.
+- [ ] Folder/library synchronization between devices or through Prism is not implemented. Folder state is local.
 
-### Gate I1: Restricted Prism Ingestion & Durable Outbox (100% Complete)
-- [x] **I1.1 Canonical PR-B Schema**: Built `PrismMeetingPayload` with versioned schema (`schemaVersion: 1`), calendar metadata, person contacts, timestamped utterances, and deterministic SHA-256 `contentHash`.
-- [x] **I1.2 PrismClient Protocol**: REST client targeting `PUT /api/integrations/minutes/meetings/{id}` with `X-Prism-Vault`, `Idempotency-Key`, and `If-Match` base revision headers.
-- [x] **I1.3 Durable Outbox State Machine**: Implemented queue transitions: `pending → sending → awaitingReceipt → synced` with branches for `failedRetryable`, `conflict`, `needsSignIn`, `forbidden`, and `revoked`.
-- [x] **I1.4 Idempotency Deduplication**: Outbox deduplicates repeat enqueue operations using deterministic `sha256(meetingId + revision + contentHash)` keys.
-- [x] **I1.5 SQLite Outbox Table**: Added `outbox_item` table with durable receipts and retry counters.
-- **Exit Evidence**: 8 automated tests in `OutboxAndPrismTests` pass cleanly using real Foundation `URLSession` stack with mock `URLProtocol`. Total 52 unit tests pass. **Commit: `f59f832`**
+[Folder implementation/evidence](../audit-2026-10-14/18-FOLDERS-AND-LOCAL-FILING.md).
 
----
+## Calendar, remembered voices and physical iPhone (2026-10-15)
 
-### Gate M3: Mobile & iOS Platform Boundaries (100% Complete)
-- [x] **M3.1 AVAudioSession Management**: Added iOS `AVAudioSession` configuration (`.playAndRecord`, `.allowBluetooth`, `.defaultToSpeaker`) in `AudioCaptureService`.
-- [x] **M3.2 Background Interruption Observers**: Registered for `AVAudioSession.interruptionNotification` and `routeChangeNotification` to handle lock-screen events and phone calls without crashing or corrupting recordings.
-- [x] **M3.3 iOS Architecture Validation**: Conditionalized macOS-specific `Process()` calls with `#if os(macOS)` guards.
-- **Exit Evidence**: All Minutes libraries (`MinutesCore`, `MinutesSpeech`, `MinutesSpeakerID`, `MinutesExport`, `MinutesSummarize`, `MinutesUI`) compile cleanly for `arm64-apple-ios18.0-simulator` with 0 errors and 0 warnings. **Commit: `5c8ad62`**
+- [x] Shared Calendar agenda and event detail, exact-email person reuse, bounded per-person call history with explicit invitee/confirmed/recognized distinctions; CLI and temporary-database verification passed.
+- [x] Actual trained voice enrollment, database reopen, independent-clip recognition, transcript label persistence and wrong-speaker abstention passed using two generated speakers. This does not establish real-human accuracy or cross-device synchronization.
+- [x] Integrated source build 22: 241 reported tests across seven test runs passed (opt-in model/live tests skipped as configured). Mac build 22 Developer ID signing, notarization, stapling and Gatekeeper passed. iPhone build 21 installed on the owner's physical device; build 22 device compilation passed.
+- [x] Owner confirmed physical iPhone Calendar sync, then build 24 first-attempt recording, Stop, transcription and summary generation. Repaired missing Stop, unconditional healthy-engine notification failures, interrupted WAV copy recovery and recovery retry persistence. Source now honors the owner’s preference for a single card Stop action.
+- [~] Summary quality needs owner acceptance. Final controlled native fixtures preserve the substantive discussion’s decision, follow-ups and unresolved question, and the brief clip’s stated reason. These do not establish arbitrary conversation or phone-model quality.
+- [~] Later physical testing reproduced a transient startup halt with zero frames and unchanged input/format. Build 26 diagnostics show its bounded restart also failed immediately. Build 27 explicitly reactivates the iOS audio session before recovery, revalidates the graph/deadline, and records safe failure stage/domain/code. All 265 reported offline tests passed and the physical iPhone build compiled, verified, installed and launched. The owner reproduced the failure on build 27; diagnostics now identify engine-start error -10868 (unsupported format), zero committed frames. Build 28 now reconstructs the iOS graph with native-format taps, generation-isolated callbacks and the same writer/startup deadline. It also reduces requested tap batches to 1024 and advances waveform history during steady volume. All 269 offline tests and device compilation/signature/installation passed; independent lifecycle review cleared the source. The owner confirmed first recording works in build 28; its trace verifies 14.299 seconds and no capture error. Waveform lag persisted in 28. Build 29 isolates 20 Hz samples in a dedicated meter publisher/readout and draws one Canvas; regression verifies zero app-wide redraw notifications for 18 within-second meter updates and exact finalized Stop duration. All 271 reported offline tests and physical-device build/signature/installation passed; The owner confirmed build 29 waveform is responsive and recording works; its trace verifies 10.999 seconds/110 buffers with no failure. Broader long/background/route acceptance remains open.
+- [ ] Longer/background phone recording and real-human remembered-voice reuse remain acceptance gates. Voice profiles do not sync through Prism.
 
----
+## Extended recording, local completion and signed glass revision (2026-10-14)
 
-### Gate R1 & R2: Release, Packaging & Verification (100% Complete)
-- [x] **R1.1 Hardened Runtime Entitlements**: Created `scripts/Minutes.entitlements` configuring audio input, network client, and user-selected file read/write permissions.
-- [x] **R1.2 Automated Release Packaging Script**: Created `scripts/build-app.sh` which compiles release binaries, constructs `Minutes.app` bundle, populates `Info.plist`, codesigns with hardened runtime, verifies with `codesign --verify --deep --strict`, and packages `Minutes-1.0.0.zip`.
-- [x] **R1.3 Clean-Device Validation**: Documented clean-install, upgrade, and uninstallation runbook.
-- **Exit Evidence**: `Minutes.app` successfully built, codesigned, and packaged. **Commit: `204c971`**
+- [x] Reproduced and repaired long microphone dropout: signed native repeat captured 372.55 seconds with complete 48 kHz system/microphone tracks, no manifest issues, and first/last generated speech on both tracks.
+- [x] Repaired automatic clustering overmerge with actual installed-model controls; native long repeat transcribed all 18 generated turns and correctly separated both dominant voices. A tiny uncertain third fragment remains; synthetic results are not general speaker/overlap accuracy.
+- [x] Automatic local notes and grounded placeholder-only title after recording; empty speech, provider fallback, existing/manual/concurrent edits protected by regressions.
+- [x] Strong remembered-voice prefilling with compatible learned profiles, acoustic ambiguity rejection and no implicit enrollment. Identical-evidence human choices survive retry; changed analysis requires review.
+- [x] Refined centered pre-record composition, spacious glass Record pill, material-backed toolbars, inset sidebar and native editing/review surfaces. Saved reprocessing explicitly communicates replacement of transcript/speaker analysis.
+- [x] Developer ID signing identity and local notarization profile configured; build 6 Apple notarization, stapling and Gatekeeper verification passed. Final source: 206 reported Swift tests, four expected opt-in skips; iOS Simulator build passed.
+- [x] Final build 8 signed, notarized, stapled, Gatekeeper accepted and installed at the stable app path. Native two-source recording automatically produced title/notes and two voice clusters. Synthetic staging export returned a committed server receipt. Google actual expired-token refresh and clean restart passed after one-time owner Keychain approval; Google/Prism restored in build 8.
+- [ ] Physical iPhone, clean-device and hour-long real-human/overlap/route-change acceptance remain open. The owner changed playback speakers after opening words during a synthetic test; that affected opening is not classified as a transcription failure.
 
----
+[Detailed evidence and limits](../audit-2026-10-14/15-EXTENDED-CAPTURE-AND-NATIVE-REFINEMENT.md). The sections below retain historical milestones.
 
-## Owner-Dependent Release Inputs (External Release Gate)
-1. **Apple Developer Team ID & Signing Identity**: Set `DEVELOPER_ID_APPLICATION` env var when building on a machine with production Apple Developer credentials for notarization via `xcrun notarytool`.
-2. **Google Cloud OAuth Project**: Client ID and verified consent screen for direct Google Calendar OAuth.
-3. **Physical Baseline iPhone**: For TestFlight archive upload and physical lock-screen capture validation.
+## Hardware capture and restart recovery (2026-10-14)
+
+- [x] Stable local install at `~/Applications/Minutes.app`; backed-up upgrades, workspace preview unregistration and exact executable path verified after macOS permission restart.
+- [x] Saved Google grant restores on launch without a browser or Keychain prompt; installed build 3 read the real Calendar API after launch, and final build 4 remained connected after a clean quit/relaunch. Explicit disconnect/Apple provider choices are respected. Five startup regression tests pass.
+- [x] Removed duplicate toolbar Record icon and custom clipped toolbar sizing; native toolbar metrics and increased document spacing. Saved recordings can be transcribed again from Meeting actions.
+- [x] Actual system/microphone tracks captured in build 3; generated stimulus matched the system track at 0.982 normalized correlation.
+- [x] Repaired empty whole-recording recognition by using bounded speech windows with source timestamp restoration. Installed build 4 correctly transcribed the original untrimmed system recording at 11.6775 seconds.
+- [x] Fresh built-in microphone recording in build 4 captured and transcribed generated speech with one speaker cluster; no app crash.
+- [x] Build 5 repaired a native ScreenCaptureKit startup callback failure. Actual system-plus-microphone capture → finalization → transcription passed: 25.5 seconds, both 48 kHz tracks, no manifest issues, expected sentence, one cluster/utterance. Permissions and Google/Prism connections survived a clean restart. Full suite: 175 discovered, 172 passed, three opt-in skips; strict Mac package validation passed. This historical build used ad-hoc signing; Developer ID signing/notarization is now configured as recorded above.
+- [ ] Real expired-token refresh, multi-speaker accuracy, long-session/route changes and physical iPhone acceptance remain open.
+
+Prior build 4 suite: 174 discovered, 171 passed, three opt-in skips; Mac build 4 signature/privacy/package and iOS Simulator build passed. Final build 5 verification is recorded above. Current local app: `~/Applications/Minutes.app`. [Evidence and limits](../audit-2026-10-14/14-HARDWARE-AND-RECONNECT.md). Earlier sections below are historical snapshots.
+
+## Mac mini staging and Notes reference revision
+
+2026-10-14: Deployed isolated Prism staging to `https://minutes.omniharmonic.com` with a dedicated tunnel, loopback service and `minutes-staging-20261014` vault. Public TLS/401 boundaries and host-scoped vault access passed; main Prism remains unchanged. Mac and iPhone layouts were revised using the supplied Apple Notes references; both build. Live sign-in exposed a Swift actor-isolation crash in the system-browser completion; explicit Sendable callback isolation and a background-delivery regression test address it. Native Safari sign-in, persisted restricted Keychain grant, actual synthetic vault export, unchanged deduplication and edited revision 2 acceptance passed. Final native glass toolbar/sidebar revision builds and strict signature verification pass; see the [current deployment report](../audit-2026-10-14/12-MAC-MINI-DEPLOYMENT.md).
+
+## Notes-first redesign and Prism follow-up
+
+2026-10-14: Replaced the rejected card/dashboard layout with true native three-column navigation, plain editable notes, native toolbar search/share, a recording popover and standard Cmd-comma Settings tabs. Simplified transcript/speaker/People review. Final package UI checks verified title/note persistence, older-meeting selection and immediate search of saved notes with fictional fixtures. Public OAuth fields remain available under Advanced.
+
+Prism work resumed on stable `288ce029`: dedicated selected-vault grants, restricted native client, durable imports/receipts and session-cookie confinement are implemented. Real native Swift→local Prism HTTP acceptance passed. Source applied to the active Prism checkout; production service/DNS/TLS and live vault consent remain pending. User notes and summary evidence provenance were corrected in export payloads.
+
+Final checks: 151 Swift definitions, 148 passed and three opt-in skips; HTTP acceptance separately passed. Native Mac release/iOS Simulator builds, strict ad-hoc signature and ZIP checks passed. Current package: `build/notes-first-2026-10-14/Minutes.app`. [Report](../audit-2026-10-14/11-NOTES-FIRST-AND-PRISM.md).
+
+## Previous continuation: capture, connections and visual design
+
+- [x] Native Mac visual upgrade: adaptive system colors, native navigation/toolbars, real Liquid Glass control surfaces on supported OS versions, solid note/transcript surfaces, explicit search, editable summary Markdown, original app icon and privacy/resource metadata. Running-app recorder/connection controls inspected with an isolated synthetic library.
+- [~] Mac call audio: ScreenCaptureKit system + microphone sources, timing manifests and aligned processing copy are implemented and covered by 12 source/parser tests plus 3 AppState flow tests. Physical permissions, actual two-machine call capture, route changes, long-session reliability and crash-recovery acceptance remain unverified.
+- [~] Direct Google native PKCE/API connection, Keychain credentials, refresh/revoke, pagination and native controls are implemented. Public client IDs, real consent, account permissions and calendar integration acceptance remain pending; system Calendar is still separately supported.
+- [~] Native restricted Prism sign-in/capability/queue controls are implemented. Origin, grant and revision safeguards are covered by synthetic tests. The owner paused **all Prism server changes/deployment** until a separate agent finishes a stable server revision; no server integration or public-domain readiness is claimed.
+- [~] Optional Apple Foundation Models summaries are implemented with availability checks, bounded/cited typed generation and four generated-note formats. A fictional native request passed after two freeform outputs were correctly rejected. Generated drafts still require review; long-meeting quality/performance remain unmeasured. Extractive notes remain the explicit default.
+- [~] Configured Mac notarization/stapling/Gatekeeper flow and native iOS resources are prepared. Developer ID/notary profile, Team/provisioning, physical devices and production acceptance are still required. Final integrated Swift checks passed: 148 discovered test definitions, 146 passed, two explicitly opt-in model tests skipped. The regenerated iOS simulator target built successfully; production signing and physical-device acceptance remain pending. Current local-test app: `build/production-pass-2026-10-14/Minutes.app`. Package evidence is recorded in the continuation report; the repair-package paths below are historical.
+
+Setup: [Google](docs/GOOGLE_CALENDAR_SETUP.md), [Prism](docs/PRISM_CONNECTION_SETUP.md), [Apple/device/release inputs](docs/RELEASE_SETUP.md). Current continuation report: `../audit-2026-10-14/10-PRODUCTION-PASS.md`.
+
+## Verified foundations and second-audit repairs
+
+- [x] Swift package builds shared modules, a macOS SwiftUI executable, and `minutes-cli`.
+- [x] SQLite persistence, meeting-scoped attendees, acoustic clustering/merger helpers, speaker matching, notes/bookmarks, Markdown export, and mock-transport Prism tests exist. Tests verify specific behavior; they do not establish the full PRD acceptance criteria.
+- [x] Removed fabricated production transcript/summary outputs in prior work; normal processing uses decoded audio. Unused application demo/sample loaders that wrote fictional contacts and vectors into the normal store were removed.
+- [x] **2026-10-14 repair: local recognition fails closed.** Apple Speech requests always require on-device recognition; an unsupported locale/device fails before recognition rather than silently allowing server recognition. Request-policy tests cover both branches. Apple Speech transcription permission and actual speech decoding were not exercised; the trained diarization smoke below is separate.
+- [x] **2026-10-14 repair: recording failures are visible.** Start reports active recording only after recorder startup and meeting persistence succeed. Stop errors/missing or invalid finalized audio mark the meeting failed and avoid processing. App state supports injected storage/recorders for isolated error-path tests. Hardware capture remains unverified. Recorder writes now retain the first I/O/conversion failure, count only committed frames, close files before processing, and stop via the UI error path. Capture teardown no longer holds a callback lock while waiting for audio callbacks.
+- [x] **2026-10-14 repair: Prism content identity.** Structured hashing includes transcript text/timestamps/speaker identity and people details. Delivery keys additionally include destination vault and the complete encoded payload, so transcript edits and distinct vault destinations are no longer collapsed.
+- [x] **2026-10-14 repair: speaker provenance.** Prism speaker IDs resolve through meeting clusters and exported people. Unresolved speakers remain unassigned instead of exporting display names as confirmed IDs.
+- [x] **2026-10-14 repair: honest receipts.** HTTP 202 enters `awaitingReceipt` without a fabricated committed receipt. HTTP 200/201 require actual committed receipt IDs and server revision. Pending receipts are retried with the same idempotent payload and bounded exponential backoff; a dedicated receipt-status endpoint remains unimplemented.
+
+- [x] **2026-10-14 durability follow-up:** attendee/cluster/utterance batches are transactional and throw on SQLite prepare/step failures; invalid rows roll back preceding successful rows. Summary constraint failures now throw. Text bindings copy their values safely in these write paths.
+- [x] **2026-10-14 startup follow-up:** configured storage failures block startup with an explicit error and retry control. There is no silent temporary/in-memory database fallback.
+- [x] **2026-10-14 outbox recovery follow-up:** atomic enqueue deduplication and conditional SQLite claims coordinate independent connections. Stale sends recover after a 120-second lease with their original key; late receipts cannot overwrite cancelled/reclaimed rows. Pending receipts retry idempotently, automatic attempts honor the configured retry ceiling, and persistence failures propagate to callers.
+
+## Incomplete product gates
+
+- [~] **Speech stack:** current ASR is Apple Speech, not Parakeet. Trained FluidAudio 0.17.7 segmentation/WeSpeaker integration and explicit local model setup were added; normal processing requires installed, verified models. An explicitly enabled smoke downloaded pinned model weights to isolated temporary storage and ran real trained diarization on a public SDK fixture; setup-disabled inference also passed. Apple Speech ASR and accuracy benchmarks remain unverified. No held-out WER/DER, identity precision/abstention, runtime, or memory acceptance evidence.
+- [~] **Capture:** microphone PCM and optional ScreenCaptureKit call-audio recording exist. Separate native source tracks share timing metadata and render an aligned 48 kHz processing copy; this is not the original CoreAudio process-tap design. Full durable crash recovery and demonstrated hardware/device/route/interruption acceptance remain unfinished. Injected disk-write failure tests verify error retention and committed-frame accounting. Physical disk-full recording, route changes and long-session capture remain unverified.
+- [~] **Persistence:** batch write errors and startup storage failures now propagate explicitly. Pipeline result/status commits are transactional. Persisted artifacts/steps/edit revisions and resumable jobs remain absent; these remain release blockers.
+- [~] **Learning/review:** model provenance now separates trained vectors from legacy spectral/demo data. CLI learning requires `--learn`; app learning defaults off and applies only to the chosen confirmed compatible cluster. Real cross-session recognition and correction/revocation lineage remain unproven; current suggestions must not be described as calibrated speaker identity.
+- [~] **Prism outbox:** native connection/capability controls and mock URLSession tests cover delivery/error states. No live server contract or vault write was tested. Recovery claims, bounded retries and cancellation-preserving receipt updates are covered by tests. A dedicated receipt polling contract and live server acceptance remain incomplete; local queues and cached capabilities now bind to a specific device grant. Cancellation preserves the local revoked state but cannot undo an upload already accepted remotely. The native outbox is now the app's Parachute/Prism export flow, requiring restricted capability verification; the legacy CLI adapter is explicitly separate.
+- [~] **Calendar:** read-only EventKit provider, scoped event/participant snapshots, occurrence-aware suppression, transactional meeting/invitee binding, CLI `events`/`bind-event`, native Calendar list/Record controls, in-app prompts, and opt-in OS notifications are implemented. Refresh reacts to calendar changes, wake, foregrounding and time-zone changes. The EventKit path uses accounts already configured in Apple Calendar, including Google. A separate direct Google OAuth/API path is now implemented, with real-account acceptance pending. No personal calendar read, permission grant, or OS notification delivery was exercised by the audit. Native integration acceptance remains pending.
+- [~] **iOS application:** `Apps/project.yml`, generated Xcode project, native iPhone/iPad app and shared Core/Speech/Calendar/UI dependencies build successfully for the simulator. An isolated iPhone 17 Pro/iOS 27 simulator launched the empty library and remained alive; no permissions, calendar connection, model setup, or microphone recording were exercised there. Live Activity/widget, App Group configuration and physical-device background recording remain incomplete.
+- [~] **Summaries/library:** extractive notes and explicit Apple on-device generation exist, with bounded evidence/citations and editable Markdown. Mac title/transcript search exists. Long-meeting quality/performance, full hierarchical synthesis, edited revision history, retention and finalized export history remain incomplete.
+- [~] **Mac packaging:** packaging/signing script and entitlements exist. Usage descriptions for microphone, Speech and full calendar access are supplied; CLI embeds its own Speech/calendar descriptions. System-audio permission no longer claims success from device presence. A release app was rebuilt, SwiftPM resources embedded, ad-hoc signed and verified with `codesign --verify --deep --strict`. Relocated resource lookup also passed. The local-test app/ZIP are under `build/repair-2026-10-14/`. No notarization/stapling, Gatekeeper acceptance, or clean install/upgrade/uninstall on another Mac was performed.
+- [!] Production signing/notarization credentials, TestFlight provisioning, and a physical iPhone are still needed after the missing implementation is completed.
+
+## Verification log
+
+2026-10-15: Reproduced and repaired the missing diarization-label handoff into transcripts, confirmed-name propagation, and legacy internal-ID display. Twenty focused tests passed; integrated Swift runners report 228 tests with five expected opt-in test skips and the opt-in Prism contract suite skipped, zero failures. iOS Simulator build 13 succeeded. Summary citation retry remains strict and bounded; an actual on-device fictional garden fixture yielded three useful cited points. Intro-only speech now reports insufficient conversation. Native microphone metering was verified changing from roughly 20% to 56–58% during playback; the user also spoke, so that mixed capture remains local and was neither exported nor enrolled. Build 13 native design/install verification is in progress; see audit report 16 for evidence and remaining limits.
+
+2026-10-14: Four new outbox regression tests first failed with eight assertion failures, reproducing dropped transcript corrections, wrong destination deduplication, invented confirmed identities, and premature sync success. All four pass after the repairs; 11 outbox tests pass. Local-only Speech request tests and injected AppState capture failure tests were added before their APIs were implemented. Tests use temporary databases and injected recorder/HTTP implementations; this audit did not capture personal audio, modify accounts, or write to a personal vault.
+
+Initial verification: `CLANG_MODULE_CACHE_PATH=/tmp/minutes-clang-cache SWIFTPM_MODULECACHE_OVERRIDE=/tmp/minutes-swift-cache swift test --disable-sandbox --package-path MinutesKit` completed successfully: 60 tests across 19 suites, including all 8 new regression tests. The build completed successfully; SwiftPM reported only inaccessible user-cache warnings. `git diff --check` passed. No device or external integration acceptance is implied by passing unit tests.
+
+2026-10-14 durability follow-up: Four SQLite failure tests first failed with seven assertions; five outbox recovery/concurrency tests first failed with seven assertions. After repairs, all targeted tests passed (25 tests), including injected disk failures and blocked-storage startup. The full durability follow-up passed 72 tests across 22 suites. The final combined run is recorded below.
+
+2026-10-14 Calendar follow-up: Added six scope/mapping/binding tests and one injected app calendar flow test before implementation. Test fixtures cover half-open event intervals, cancelled/all-day exclusion, recurring occurrence IDs, conservative email mapping, prompt suppression, scoped attendees, persistence, rebinding and explicit connect-before-fetch. No personal calendar, OS notification request, model setup/download or microphone capture is invoked by these calendar tests. Apple Speech requests authorization at first actual use; untimed text imports never invoke recognition, and the old fabricated plain-text timing fallback is rejected.
+
+## Final verification (2026-10-14)
+
+- **Swift suite:** 103 discovered tests, **102 passed and one opt-in model test skipped**, zero failures; `/tmp/minutes-final-all-tests.log`. This includes Calendar mapping/binding/app flow, capture and disk failures, durable audio imports, atomic persistence, outbox concurrency/recovery, provenance safety, grounded summaries, Markdown safety and mocked HTTP failure paths.
+- **Real trained model smoke:** explicit setup in `/private/tmp/minutes-trained-model-smoke`, public SDK fixture `01-validation-request-21.4s.wav`, actual trained segmentation/256-dimensional embeddings. Setup-enabled run passed in 8.449 seconds; repeated setup-disabled run passed in 0.361 seconds. No Apple Speech ASR, personal microphone, known-person enrollment, WER/DER or recognition calibration was involved. Logs: `/tmp/minutes-real-model-smoke.log`, `/tmp/minutes-offline-model-smoke.log`.
+- **Native iOS:** `xcodebuild -project Apps/Minutes.xcodeproj -scheme MinutesiOS -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath /private/tmp/minutes-ios-build CODE_SIGNING_ALLOWED=NO build` succeeded. Empty-library launch was checked in a new isolated simulator, then only that simulator was shut down/deleted. No physical-device acceptance is implied.
+- **Mac package:** release build, embedded `FluidAudio_FluidAudio.bundle`, static SDK dependency inspection, inside-out ad-hoc signatures, strict verification and relocated resource lookup passed. Artifact: `build/repair-2026-10-14/Minutes-1.0.0-local-test.zip` (SHA-256 `74c5ac22c20edcf1b9c323d86eeda52a70860ec1a1b7ae8d154ae97ef457e53f`). It is local-test-only and unnotarized. Sandbox blocked Xcode dsymutil initially; the same build completed with approved build-only escalation, without launching the Mac app.
+- **CLI acceptance:** corrupt audio rejection, untimed transcript import, unsupported export rejection before adapter invocation, and Markdown output under a temporary directory passed. No personal database or vault was written.
+- **Import repair:** CLI/app share validated, uniquely copied managed audio. Missing-model or other processing failures preserve the saved recording; `processCurrentMeeting()` supports retry. Text import has unknown timing/speakers and no synthetic embeddings; UI labels it `Untimed`. Four shared import tests and two injected app import flow tests pass.
+- **Additional repair:** Markdown uses stable meeting identity to avoid same-title collisions, preserves personal notes and escapes YAML. Legacy export rejects unsafe origins/redirects and reports HTTP errors instead of falsely succeeding. Restricted Prism authorization/live server acceptance remains unconnected. Default summaries quote grounded source text for review; no canned architecture overview or invented commitments.
+
+Durable verification logs and the simulator screenshot are in `../audit-2026-10-14/repair-evidence/`. No commits, real calendar access, personal audio capture, personal vault writes, production signing or publishing occurred.
+
+
+## Recording and Google repair follow-up (2026-10-14)
+
+- [x] Block capture before meeting creation when installed speaker models are missing; explicit setup checks Speech and microphone permissions.
+- [x] Replace Mac/iPhone recording modal with inline document workspace, large library Record footer, source selection and actual microphone level history; improve control spacing/accessibility.
+- [x] Move first Speech consent out of batch processing, reject unsafe direct-child first-consent launches with a recoverable error, and embed/verify matching app privacy metadata. Native generated-speech import/transcription/diarization passed after owner system approval (one utterance/cluster, app remained running). This does not verify hardware microphone or system-audio capture.
+- [x] Restore stored Prism grants on startup, make the initial Keychain lookup noninteractive and allow explicit Verify; cancel sign-in without late reconnection.
+- [x] Configure Google project/native clients with owner-approved policy and scope setup; store registration in Keychain and wire public native callback metadata.
+- [x] Reproduce/fix desktop OAuth callback closing a delayed browser request because accepted Darwin sockets inherited O_NONBLOCK. Synthetic delayed-browser regression passes.
+- [x] Accept real Google native authorization, token exchange, Keychain token save and seven-day events API readback in the final build.
+- [ ] Real expired-token refresh and restart/reconnect acceptance remain pending (synthetic coverage passes).
+
+Verification: final synthetic suite 165 discovered, 162 passed, three opt-in skips, zero failures (`../audit-2026-10-14/recording-repair-evidence/swift-registration-final.log`). Mac release package and strict ad-hoc signature/privacy metadata verification passed. Current artifact: `build/recording-google-final-2026-10-14/Minutes.app`. The final iOS simulator rebuild passed after shared registration/Keychain changes; public OAuth/callback metadata was validated earlier. No notarization, App Store release, real-time ASR, speaker accuracy benchmark, two-machine StudioLink acceptance or SaaS parity is claimed. See `../audit-2026-10-14/13-RECORDING-AND-GOOGLE.md`.
+
+2026-10-14 Google acceptance follow-up: native browser callback now succeeds. Google token endpoint diagnostics confirmed this desktop client requires `client_secret`; registration now stays in Keychain and is submitted only on desktop token exchange/refresh. New synthetic tests cover both requests and safe setup error messages. Final native retry passed: owner sign-in completed, tokens were exchanged/saved and the real seven-day events request succeeded. Screenshot: `google-native-connected.png`.
+
+2026-10-14 final native acceptance: final package passed recording readiness, automatically restored the Minutes Staging Prism grant after relaunch, and exported the generated-speech meeting. Mac mini readback confirmed a committed revision-1 receipt and both actual vault notes, including the recognized transcript and source linkage. Evidence: `../audit-2026-10-14/recording-repair-evidence/prism-transcribed-export-readback.json`. This is synthetic imported speech, not hardware capture acceptance.
+
+- 2026-10-16: Build 32 installed on Mac/iPhone with saved-audio/import automatic completion, protected existing summaries/titles, direct People voice enrollment, compact header/search, floating transparent Record overlay, event detail cleanup and native-verified folder drag (manual membership persisted, test restored). Full Swift model-free suite passed. Summary failure reproduced on fictional normal speech: model-generated question schema invented uncertainty and failed grounding. Build 33 source replaces that path with compact/detailed claims plus cited actual unknown-source excerpts; all 35 local summary tests with real Apple inference passed, with 7 final provenance tests. Real 20.55-second English microphone clip remains unrecognized (including amplified copy) while generated speech succeeds; original preserved, playback confirmation requested. See parent audit report 22; no claim of transcription reliability or pixel-perfect Notes parity.
+
+
+2026-10-16 build 36 native follow-through: signed, Apple-notarized, stapled and Gatekeeper-accepted Mac build installed at the stable path; iPhone 36 installed. Two consecutive microphone captures passed on build 35. Trained-profile explicit enrollment/persist/reopen/automatic-reuse acceptance passed with two generated voices and a wrong-person abstention control. Combined source mixing lost a substantial speech region despite a clean device original, so build 36 now recognizes validated aligned originals independently with source-qualified identities. Native short device capture matched 42/46 reference tokens and generated its AI summary automatically. The historical muffled user clip remains unrecovered. A longer combined test was stopped when the owner reported being with a group; it did not pass acceptance. No more audible playback or microphone tests should run without renewed readiness.
+
+2026-10-16 build 37 follow-up: owner requested system audio without speakers/microphone. Added explicit Mac audio only choice, `includeMicrophone: false` forwarding, source-aware consent and microphone-off UI. Regression first failed for the missing mode/API and then passed alongside recording readiness/source processing tests. Shared iOS UI compilation and full model-free suite pass; Mac 37 is signed, Apple-notarized, stapled, Gatekeeper-accepted and installed. A silent native short capture passed with system-only metadata, zero microphone files, transcript and automatic AI summary. A second short capture routed only to the installed BlackHole virtual output also passed without changing system output. Full long virtual-only acceptance passed: 362.78-second native system-only capture, zero microphone files/capture issues, all 18 generated turns covered, 6.30% raw normalized WER, dominant speaker correct for 18/18 turns under anonymous label mapping; three clusters for two voices (minor over-segmentation). Automatic completion saved an actual on-device AI draft. Generated playback/capture stopped. See `audit/long-virtual-system-capture-build37.json`; no real-human/overlap or original muffled-clip recovery claim. Existing CLI `capture-system --system-only` remains the underlying capability.
+
+
+### 2026-10-16 — Integrated voice/calendar acceptance and build39
+- [x] Real Fluid diarization + app processing + calendar binding + explicit voice enrollment + reopen + later automatic naming acceptance passed with generated voices/isolated DBs (1test,4.267sec). Deterministic timed ASR injection is explicit; this is not a speech-recognition accuracy test.
+- [x] Repeated enrollment, accepted/tentative/unknown RSVP, declined exclusion, calendar-alone/wrong-profile abstention, explicit confirmation/unknown preservation, forgetting and enrollment-source deletion controls passed. Three acoustic clusters for two voices remain; no wrong known names in this fixture, small anonymous portion.
+- [x] Meeting-review enrollment now calls shared VoiceEnrollment.remember (stale evidence validation/deduplication); People explains device-local profiles and automatic strong-match naming.
+- [x] Build39 installed Mac+iPhone; Mac Developer ID notarization/staple/Gatekeeper passed. Native People screen inspected silently, including legacy-profile ineligibility. Preserve older profiles; current-model enrollment requires a new confirmed >=20sec usable sample.
+- [ ] Real-human/noisy/overlapping/hardware-change recognition acceptance, native human confirmation of a new compatible voice, and cross-device profile sync remain unverified/unimplemented. No new recording or playback occurred.
+- Evidence: `audit/identity-calendar-review-2026-10-16.md`, `audit/minutes-integrated-trained-identity-current.log`.
+
+
+### 2026-10-17 — Preview40 speaker UX, route recovery and roadmap
+- [x] Source-aware voice samples, visible play/pause/progress/disabled states, iOS explicit playback session; native iPhone confirmation now uses fresh persisted evidence and idempotent shared voice enrollment.
+- [x] Built-in iPhone microphone preference, bounded/coalesced route graph recovery, retired callback generations and adaptive native converter preserve the existing PCM file. Nonfatal notices explain possible gaps.
+- [x] Full model-free suite324tests passed; installed-model integrated workflow1test passed (4.111sec), with real diarization/matching/persistence and deterministic timed ASR fixtures. iOS target compilation passed.
+- [x] Research-only roadmaps: optional server meeting capture, live captions/notch and encrypted opt-in voiceprint sync, with official eligibility/platform gates.
+- [ ] Physical AirPods switch and audible sample validation; human multi-voice calibration; unrelated cleanMac install; Google registration provisioning for freshMacs; iOS public TestFlight/App Store delivery.
+- Release report: docs/release/2026-10-17-preview.md. Public installers/private source explicitly authorized; Minutes preview Google limitation accepted.

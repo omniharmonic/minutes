@@ -30,7 +30,7 @@ struct AdversarialCalendarTests {
         let c1 = SpeakerCluster(id: "c1", meetingId: "m1", trackId: "t1", label: "Speaker 1", centroid: [0.98, 0.02, 0.0])
         let c2 = SpeakerCluster(id: "c2", meetingId: "m1", trackId: "t1", label: "Speaker 2", centroid: [0.01, 0.99, 0.0])
         
-        let matcher = SpeakerMatcher(autoThreshold: 0.65, suggestThreshold: 0.50, attendeeBonus: 0.08)
+        let matcher = SpeakerMatcher(autoThreshold: 0.65, suggestThreshold: 0.50, attendeeBonus: 0.08, requiredModel: nil, allowAutomaticAssignment: true, minimumMargin: 0)
         let matches = matcher.match(
             clusters: [c1, c2],
             people: allAttendees,
@@ -56,7 +56,7 @@ struct AdversarialCalendarTests {
         let c1 = SpeakerCluster(id: "c1", meetingId: "m", trackId: "t", label: "Spk 1", centroid: [0.95, 0.05])
         let c2 = SpeakerCluster(id: "c2", meetingId: "m", trackId: "t", label: "Spk 2", centroid: [-0.95, 0.05])
         
-        let matcher = SpeakerMatcher()
+        let matcher = SpeakerMatcher(requiredModel: nil, allowAutomaticAssignment: true, minimumMargin: 0)
         // No attendees
         let matches = matcher.match(
             clusters: [c1, c2],

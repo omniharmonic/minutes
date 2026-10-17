@@ -35,16 +35,28 @@ public final class AudioPlaybackService: NSObject, ObservableObject, AVAudioPlay
         self.currentTime = 0.0
     }
     
-    public func play(from startTime: Double = 0.0, to endTime: Double? = nil) {
-        guard let p = player else { return }
-        
+    @discardableResult public func play(from startTime: Double = 0.0, to endTime: Double? = nil) -> Bool {
+        guard let p = player else { return false }
+        #if os(iOS)
+        // Recording deactivates its session at Stop. Restore the media route
+        // only for an explicit Play action, including resumed samples.
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default)
+            try session.setActive(true)
+        } catch {
+            self.isPlaying = false
+            return false
+        }
+        #endif
         p.currentTime = max(0.0, min(startTime, p.duration))
         self.currentTime = p.currentTime
         self.stopTime = endTime
         
-        p.play()
+        guard p.play() else { self.isPlaying = false; return false }
         self.isPlaying = true
         startTimeObserver()
+        return true
     }
     
     public func pause() {

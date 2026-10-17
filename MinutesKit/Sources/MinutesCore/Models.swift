@@ -68,13 +68,28 @@ public struct MeetingAttendee: Codable, Sendable {
     public let email: String
     public let name: String?
     public let isOrganizer: Bool
+    /// Calendar invitation response only; never evidence of presence or voice identity.
+    public let responseStatus: String
     
-    public init(meetingId: String, personId: String? = nil, email: String, name: String? = nil, isOrganizer: Bool = false) {
+    public init(meetingId: String, personId: String? = nil, email: String, name: String? = nil, isOrganizer: Bool = false, responseStatus: String = "unknown") {
         self.meetingId = meetingId
         self.personId = personId
         self.email = email
         self.name = name
         self.isOrganizer = isOrganizer
+        self.responseStatus = responseStatus
+    }
+
+    private enum CodingKeys: String, CodingKey { case meetingId, personId, email, name, isOrganizer, responseStatus }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(meetingId: try values.decode(String.self, forKey: .meetingId),
+                  personId: try values.decodeIfPresent(String.self, forKey: .personId),
+                  email: try values.decode(String.self, forKey: .email),
+                  name: try values.decodeIfPresent(String.self, forKey: .name),
+                  isOrganizer: try values.decode(Bool.self, forKey: .isOrganizer),
+                  responseStatus: try values.decodeIfPresent(String.self, forKey: .responseStatus) ?? "unknown")
     }
 }
 
@@ -87,6 +102,7 @@ public struct SpeakerCluster: Codable, Sendable, Identifiable {
     public var speechSeconds: Double
     public var personId: String?
     public var assignment: String // "auto", "suggested", "user", "me_channel"
+    public var embeddingModel: String?
     public var confidence: Double
     
     public init(
@@ -98,7 +114,8 @@ public struct SpeakerCluster: Codable, Sendable, Identifiable {
         speechSeconds: Double = 0.0,
         personId: String? = nil,
         assignment: String = "suggested",
-        confidence: Double = 0.0
+        confidence: Double = 0.0,
+        embeddingModel: String? = nil
     ) {
         self.id = id
         self.meetingId = meetingId
@@ -109,6 +126,7 @@ public struct SpeakerCluster: Codable, Sendable, Identifiable {
         self.personId = personId
         self.assignment = assignment
         self.confidence = confidence
+        self.embeddingModel = embeddingModel
     }
 }
 
@@ -301,6 +319,9 @@ public struct OutboxItem: Codable, Sendable, Identifiable {
     public let id: String
     public let meetingId: String
     public let destinationVault: String
+    public let destinationOrigin: String?
+    public let grantFingerprint: String?
+    public let baseServerRevision: Int?
     public let sourceRevision: Int
     public let idempotencyKey: String
     public var status: OutboxStatus
@@ -315,6 +336,9 @@ public struct OutboxItem: Codable, Sendable, Identifiable {
         id: String = UUID().uuidString.prefix(8).lowercased(),
         meetingId: String,
         destinationVault: String,
+        destinationOrigin: String? = nil,
+        grantFingerprint: String? = nil,
+        baseServerRevision: Int? = nil,
         sourceRevision: Int = 1,
         idempotencyKey: String,
         status: OutboxStatus = .pending,
@@ -328,6 +352,9 @@ public struct OutboxItem: Codable, Sendable, Identifiable {
         self.id = id
         self.meetingId = meetingId
         self.destinationVault = destinationVault
+        self.destinationOrigin = destinationOrigin
+        self.grantFingerprint = grantFingerprint
+        self.baseServerRevision = baseServerRevision
         self.sourceRevision = sourceRevision
         self.idempotencyKey = idempotencyKey
         self.status = status

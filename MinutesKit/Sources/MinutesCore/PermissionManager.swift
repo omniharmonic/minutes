@@ -9,6 +9,7 @@ public enum PermissionStatus: String, Sendable, CaseIterable {
     case denied = "Denied"
     case notDetermined = "Not Determined"
     case restricted = "Restricted"
+    case unavailable = "Not implemented"
 }
 
 public final class PermissionManager: ObservableObject, @unchecked Sendable {
@@ -63,18 +64,27 @@ public final class PermissionManager: ObservableObject, @unchecked Sendable {
     }
     
     public func checkScreenCapture() {
+        #if os(macOS)
         let granted = CGPreflightScreenCaptureAccess()
         DispatchQueue.main.async {
             self.screenStatus = granted ? .granted : .denied
         }
+        #else
+        DispatchQueue.main.async { self.screenStatus = .unavailable }
+        #endif
     }
     
     public func requestScreenCaptureAccess() -> Bool {
+        #if os(macOS)
         let granted = CGRequestScreenCaptureAccess()
         DispatchQueue.main.async {
             self.screenStatus = granted ? .granted : .denied
         }
         return granted
+        #else
+        checkScreenCapture()
+        return false
+        #endif
     }
     
     public func checkCalendar() {
@@ -122,22 +132,27 @@ public final class PermissionManager: ObservableObject, @unchecked Sendable {
     }
     
     public func checkSystemAudio() {
-        // Core Audio Process Tap (CATap) status on macOS 14.2+
-        // In local non-sandboxed CLI/app environment, system audio taps inherit microphone / screen capture entitlements.
-        // We verify that input audio hardware / tap capability is present.
-        let hasAudioDevice = !AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        ).devices.isEmpty
-        
-        DispatchQueue.main.async {
-            self.systemAudioStatus = hasAudioDevice ? .granted : .notDetermined
-        }
+        #if os(macOS)
+        // ScreenCaptureKit uses Screen & System Audio Recording permission.
+        // Preflight does not request access or open any capture devices.
+        let granted = CGPreflightScreenCaptureAccess()
+        DispatchQueue.main.async { self.systemAudioStatus = granted ? .granted : .denied }
+        #else
+        DispatchQueue.main.async { self.systemAudioStatus = .unavailable }
+        #endif
     }
     
     public func requestSystemAudioAccess() async -> Bool {
+        #if os(macOS)
+        let granted = await MainActor.run { CGRequestScreenCaptureAccess() }
+        await MainActor.run {
+            self.systemAudioStatus = granted ? .granted : .denied
+            self.screenStatus = granted ? .granted : .denied
+        }
+        return granted
+        #else
         checkSystemAudio()
-        return systemAudioStatus == .granted
+        return false
+        #endif
     }
 }

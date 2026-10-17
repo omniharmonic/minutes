@@ -2,6 +2,7 @@
 import SwiftUI
 import MinutesCore
 import MinutesSpeakerID
+import MinutesSpeech
 
 @available(macOS 15.0, iOS 18.0, *)
 public struct VoiceprintHubView: View {
@@ -26,12 +27,19 @@ public struct VoiceprintHubView: View {
     @State private var voiceprintToDelete: Voiceprint? = nil
     @State private var showingDeleteAlert = false
     
-    // Cosine Tester State
-    @State private var testVectorAIndex: Int = 0
-    @State private var testVectorBIndex: Int = 1
-    @State private var testSamplePreset: String = "Baritone Reference"
-    @State private var customTestVector: [Float] = []
-    
+    @State private var fallbackSelection: String?
+    private let externalSelection: Binding<String?>?
+    private let showsList: Bool
+    private let playbackAllowed: Bool
+    @State private var showingVoicePicker = false
+    @State private var voiceCandidates: [VoiceEnrollmentCandidate] = []
+    @State private var confirmingVoice: VoiceEnrollmentCandidate?
+    private let onOpenMeeting: ((Meeting) -> Void)?
+    @State private var recentMeetings: [PersonMeetingHistoryEntry] = []
+    @State private var historyError: String?
+    @State private var operationError: String?
+    @State private var operationFeedback: String?
+
     private let clusterManager = ClusterManager()
     private let meetingId: String?
     
@@ -41,597 +49,363 @@ public struct VoiceprintHubView: View {
         voiceprints: [Voiceprint] = [],
         people: [Person] = [],
         clusters: [SpeakerCluster] = [],
-        utterances: [Utterance] = []
+        utterances: [Utterance] = [],
+        selection: Binding<String?>? = nil,
+        showsList: Bool = true,
+        onOpenMeeting: ((Meeting) -> Void)? = nil,
+        playbackAllowed: Bool = true
     ) {
         self.store = store
+        self.playbackAllowed = playbackAllowed
         self.meetingId = meetingId
+        self.externalSelection = selection
+        self.showsList = showsList
+        self.onOpenMeeting = onOpenMeeting
         self._voiceprints = State(initialValue: voiceprints)
         self._people = State(initialValue: people)
         self._clusters = State(initialValue: clusters)
         self._utterances = State(initialValue: utterances)
     }
     
+    private var personSelection: Binding<String?> {
+        externalSelection ?? $fallbackSelection
+    }
+
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                // Header
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) {
-                            Text("🧠")
-                                .font(.title2)
-                            Text("Speaker Review & Voiceprint Hub")
-                                .font(.title2.bold())
-                                .foregroundStyle(MinutesTheme.text)
-                        }
-                        Text("256-dimensional WeSpeaker embedding centroids, cluster fine-tuning, and cosine similarity testing.")
-                            .font(.subheadline)
-                            .foregroundStyle(MinutesTheme.muted)
-                    }
-                    Spacer()
-                    
-                    HStack(spacing: 10) {
-                        Button(action: {
-                            if clusters.count >= 2 {
-                                mergeSourceClusterIds = Set(clusters.prefix(2).map { $0.id })
-                                mergeTargetName = clusters.first?.label ?? "Merged Speaker"
-                                showingMergeSheet = true
-                            }
-                        }) {
-                            Label("Merge Clusters", systemImage: "arrow.triangle.merge")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(clusters.count < 2)
-                        
-                        Button(action: {
-                            if let first = clusters.first {
-                                splitClusterId = first.id
-                                splitTimestamp = max(10.0, first.speechSeconds / 2.0)
-                                showingSplitSheet = true
-                            }
-                        }) {
-                            Label("Split Cluster", systemImage: "arrow.triangle.branch")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(clusters.isEmpty)
-                    }
-                }
-                
-                // Centroid Visualizer (2D Projection Map & Spectrum)
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Image(systemName: "circle.hexagongrid.fill")
-                            .foregroundStyle(MinutesTheme.purple)
-                        Text("CENTROID PROJECTION & EMBEDDING DENSITY")
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.purple)
-                        Spacer()
-                        Text("Model: WeSpeaker ResNet34 (256-dim)")
+        HStack(spacing: 0) {
+            if showsList {
+                List(selection: personSelection) {
+                ForEach(people) { person in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(person.displayName)
+                        Text(person.emails.first ?? (person.isMe ? "Me" : ""))
                             .font(.caption)
-                            .foregroundStyle(MinutesTheme.muted)
+                            .foregroundStyle(.secondary)
                     }
-                    
-                    HStack(alignment: .top, spacing: 20) {
-                        // 2D Projection Map
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("2D Centroid Cluster Map")
-                                .font(.caption.bold())
-                                .foregroundStyle(MinutesTheme.muted)
-                            
-                            centroid2DScatterMap
-                                .frame(height: 220)
-                                .frame(maxWidth: .infinity)
-                                .background(MinutesTheme.cardHover)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(MinutesTheme.border, lineWidth: 1)
-                                )
-                        }
-                        
-                        // Embedding Spectrum
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Feature Spectrum (16-Bin Magnitude Density)")
-                                .font(.caption.bold())
-                                .foregroundStyle(MinutesTheme.muted)
-                            
-                            centroidSpectrumView
-                                .frame(height: 220)
-                                .frame(maxWidth: .infinity)
-                                .background(MinutesTheme.cardHover)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(MinutesTheme.border, lineWidth: 1)
-                                )
-                        }
-                    }
+                    .padding(.vertical, 4)
+                    .tag(person.id)
                 }
-                .padding(20)
-                .minutesCard()
-                
-                // Enrolled Voiceprints & Clusters
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Image(systemName: "person.crop.circle.badge.checkmark")
-                            .foregroundStyle(MinutesTheme.primary)
-                        Text("ENROLLED VOICEPRINTS & ACTIVE CLUSTERS (\(activeVectorsCount))")
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.primary)
-                        Spacer()
-                    }
-                    
-                    if voiceprints.isEmpty && clusters.isEmpty {
-                        Text("No enrolled voiceprints or clusters found in the local database.")
-                            .font(.subheadline)
-                            .foregroundStyle(MinutesTheme.muted)
-                            .padding(.vertical, 12)
-                    } else {
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                            ForEach(clusters) { cluster in
-                                clusterCard(cluster)
-                            }
-                            ForEach(voiceprints) { vp in
-                                voiceprintCard(vp)
-                            }
-                        }
-                    }
-                }
-                .padding(20)
-                .minutesCard()
-                
-                // Cosine Distance & Similarity Testing Tool
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Image(systemName: "ruler.fill")
-                            .foregroundStyle(MinutesTheme.emerald)
-                        Text("COSINE DISTANCE & SIMILARITY TEST TOOL")
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.emerald)
-                        Spacer()
-                        Text("VectorMath.cosineSimilarity(a, b)")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(MinutesTheme.muted)
-                    }
-                    
-                    cosineDistanceTestHarness
-                }
-                .padding(20)
-                .minutesCard()
             }
-            .padding(24)
+            .listStyle(.sidebar)
+            .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
+                Divider()
+            }
+            ScrollView {
+                if let person = people.first(where: { $0.id == personSelection.wrappedValue }) {
+                    personDetails(person)
+                } else {
+                    ContentUnavailableView(
+                        people.isEmpty ? "No people yet" : "Select a person",
+                        systemImage: "person.crop.circle",
+                        description: Text(people.isEmpty ? "People appear when you record a calendar meeting or name a speaker." : "View recorded meetings, contact details and remembered voices.")
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 300)
+                }
+            }
         }
-        .background(MinutesTheme.bg)
-        .onAppear {
-            refreshData()
+        .background(MinutesTheme.document)
+        .onAppear { refreshData() }
+        .onChange(of: personSelection.wrappedValue) { _, _ in
+            operationFeedback = nil
+            refreshMeetingHistory()
         }
-        .sheet(isPresented: $showingMergeSheet) {
-            mergeSheetView
-        }
-        .sheet(isPresented: $showingSplitSheet) {
-            splitSheetView
-        }
-        .alert("Delete Voiceprint?", isPresented: $showingDeleteAlert, presenting: voiceprintToDelete) { vp in
-            Button("Delete", role: .destructive) {
+        .sheet(isPresented: $showingVoicePicker) { voicePicker }
+        .sheet(isPresented: $showingMergeSheet) { mergeSheetView }
+        .sheet(isPresented: $showingSplitSheet) { splitSheetView }
+        .alert("Forget this voice?", isPresented: $showingDeleteAlert, presenting: voiceprintToDelete) { voiceprint in
+            Button("Forget voice", role: .destructive) {
                 do {
-                    try store.deleteVoiceprint(id: vp.id)
+                    try store.deleteVoiceprint(id: voiceprint.id)
+                    operationFeedback = "Voice forgotten. This person’s meeting history is unchanged."
                     refreshData()
                 } catch {
-                    print("Delete failed: \(error)")
+                    operationError = error.localizedDescription
                 }
             }
             Button("Cancel", role: .cancel) {}
-        } message: { vp in
-            let personName = people.first(where: { $0.id == vp.personId })?.displayName ?? "Speaker"
-            Text("Are you sure you want to delete the voiceprint for \(personName)? This will remove its 256-dim embedding vector.")
+        } message: { _ in
+            Text("This voice sample will no longer be used to recognize this person in future meetings.")
+        }
+        .alert("Couldn’t save changes", isPresented: Binding(
+            get: { operationError != nil },
+            set: { if !$0 { operationError = nil } }
+        )) {
+            Button("OK") { operationError = nil }
+        } message: {
+            Text(operationError ?? "")
         }
     }
-    
-    private var activeVectorsCount: Int {
-        voiceprints.count + clusters.count
-    }
-    
-    // MARK: - 2D Projection Scatter Map
-    
-    private var centroid2DScatterMap: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            let cx = w / 2
-            let cy = h / 2
-            
-            ZStack {
-                // Coordinate grid lines
-                Path { path in
-                    path.move(to: CGPoint(x: 0, y: cy))
-                    path.addLine(to: CGPoint(x: w, y: cy))
-                    path.move(to: CGPoint(x: cx, y: 0))
-                    path.addLine(to: CGPoint(x: cx, y: h))
-                }
-                .stroke(MinutesTheme.border.opacity(0.8), lineWidth: 1)
-                
-                // Concentric distance rings
-                Circle()
-                    .stroke(MinutesTheme.border.opacity(0.4), lineWidth: 1)
-                    .frame(width: min(w, h) * 0.45, height: min(w, h) * 0.45)
-                Circle()
-                    .stroke(MinutesTheme.border.opacity(0.4), lineWidth: 1)
-                    .frame(width: min(w, h) * 0.85, height: min(w, h) * 0.85)
-                
-                // Plot cluster centroids
-                ForEach(clusters) { c in
-                    let coords = VectorMath.project2D(c.centroid)
-                    let ptX = cx + CGFloat(coords.x) * (w * 0.4)
-                    let ptY = cy - CGFloat(coords.y) * (h * 0.4)
-                    
-                    VStack(spacing: 2) {
-                        Circle()
-                            .fill(MinutesTheme.primary)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(Color.white, lineWidth: 2))
-                            .shadow(color: MinutesTheme.primary.opacity(0.5), radius: 6)
-                        Text(c.label)
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(MinutesTheme.text)
-                    }
-                    .position(x: ptX, y: ptY)
-                }
-                
-                // Plot enrolled voiceprints
-                ForEach(voiceprints) { vp in
-                    let coords = VectorMath.project2D(vp.vector)
-                    let ptX = cx + CGFloat(coords.x) * (w * 0.4)
-                    let ptY = cy - CGFloat(coords.y) * (h * 0.4)
-                    let name = people.first(where: { $0.id == vp.personId })?.displayName ?? "Enrolled"
-                    
-                    VStack(spacing: 2) {
-                        Circle()
-                            .fill(MinutesTheme.emerald)
-                            .frame(width: 12, height: 12)
-                            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                            .shadow(color: MinutesTheme.emerald.opacity(0.5), radius: 6)
-                        Text(name)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(MinutesTheme.muted)
-                    }
-                    .position(x: ptX, y: ptY)
-                }
-            }
-        }
-    }
-    
-    // MARK: - 16-Bin Magnitude Spectrum
-    
-    private var centroidSpectrumView: some View {
-        let activeVector: [Float] = clusters.first?.centroid ?? voiceprints.first?.vector ?? []
-        let bins = VectorMath.binFeatures(activeVector, bins: 16)
-        
-        return VStack(spacing: 8) {
-            HStack(alignment: .bottom, spacing: 4) {
-                ForEach(0..<16, id: \.self) { i in
-                    let val = i < bins.count ? CGFloat(bins[i]) : 0.0
-                    let heightRatio = min(1.0, max(0.05, val * 8.0))
-                    
-                    VStack {
-                        Spacer()
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(
-                                LinearGradient(
-                                    colors: [MinutesTheme.primary, MinutesTheme.purple],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .frame(height: max(6, heightRatio * 140))
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            
-            HStack {
-                Text("Low Band (0-64)")
-                    .font(.system(size: 9))
-                    .foregroundStyle(MinutesTheme.muted)
-                Spacer()
-                Text("Mid Band (64-192)")
-                    .font(.system(size: 9))
-                    .foregroundStyle(MinutesTheme.muted)
-                Spacer()
-                Text("High Band (192-256)")
-                    .font(.system(size: 9))
-                    .foregroundStyle(MinutesTheme.muted)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-        }
-    }
-    
-    // MARK: - Cluster Card
-    
-    @ViewBuilder
-    private func clusterCard(_ c: SpeakerCluster) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(c.label)
-                        .font(.headline)
-                        .foregroundStyle(MinutesTheme.text)
-                    Text("Cluster ID: \(c.id)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(MinutesTheme.muted)
-                }
-                Spacer()
-                Text(c.assignment.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(MinutesTheme.primary.opacity(0.15))
-                    .foregroundStyle(MinutesTheme.primary)
-                    .clipShape(Capsule())
-            }
-            
-            HStack(spacing: 16) {
-                metricItem(title: "Speech Time", value: String(format: "%.1fs", c.speechSeconds))
-                metricItem(title: "Dimension", value: "\(c.centroid.count)-dim")
-                metricItem(title: "Confidence", value: String(format: "%.2f", c.confidence))
-            }
-        }
-        .padding(14)
-        .background(MinutesTheme.cardHover)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-    
-    // MARK: - Voiceprint Card
-    
-    @ViewBuilder
-    private func voiceprintCard(_ vp: Voiceprint) -> some View {
-        let person = people.first(where: { $0.id == vp.personId })
-        let name = person?.displayName ?? "Enrolled Voice"
-        
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.headline)
-                        .foregroundStyle(MinutesTheme.text)
-                    Text("VP ID: \(vp.id)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(MinutesTheme.muted)
-                }
-                Spacer()
-                
-                Button(action: {
-                    voiceprintToDelete = vp
-                    showingDeleteAlert = true
-                }) {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundStyle(Color.red)
-                }
-                .buttonStyle(.plain)
-            }
-            
-            HStack(spacing: 16) {
-                metricItem(title: "L2 Norm", value: String(format: "%.3f", VectorMath.l2Norm(vp.vector)))
-                metricItem(title: "Dimension", value: "\(vp.dim)-dim")
-                metricItem(title: "Enrolled", value: DateFormatter.localizedString(from: vp.createdAt, dateStyle: .short, timeStyle: .none))
-            }
-        }
-        .padding(14)
-        .background(MinutesTheme.cardHover)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-    
-    @ViewBuilder
-    private func metricItem(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 10))
-                .foregroundStyle(MinutesTheme.muted)
-            Text(value)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(MinutesTheme.text)
-        }
-    }
-    
-    // MARK: - Cosine Distance Tester
-    
-    private var cosineDistanceTestHarness: some View {
-        let allVectors = collectVectors()
-        let count = allVectors.count
-        
-        let safeIdxA = min(testVectorAIndex, max(0, count - 1))
-        let safeIdxB = min(testVectorBIndex, max(0, count - 1))
-        
-        let vecA = count > 0 ? allVectors[safeIdxA].vector : []
-        let vecB: [Float]
-        if count > 1 {
-            vecB = allVectors[safeIdxB].vector
-        } else {
-            vecB = makePresetVector(testSamplePreset)
-        }
-        
-        let similarity = VectorMath.cosineSimilarity(vecA, vecB)
-        let distance = VectorMath.cosineDistance(vecA, vecB)
-        
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 20) {
-                // Vector A Selector
+
+    private func personDetails(_ person: Person) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(spacing: 14) {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 44, weight: .light)).foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("REFERENCE VECTOR A")
-                        .font(.caption.bold())
-                        .foregroundStyle(MinutesTheme.muted)
-                    Picker("", selection: $testVectorAIndex) {
-                        ForEach(0..<count, id: \.self) { i in
-                            Text(allVectors[i].label).tag(i)
-                        }
-                    }
-                    .labelsHidden()
+                    Text(person.displayName).font(.title.weight(.semibold))
+                    Text(person.isMe ? "Your profile" : "Person")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-                
-                // Vector B Selector
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("TARGET VECTOR B / SAMPLE")
-                        .font(.caption.bold())
-                        .foregroundStyle(MinutesTheme.muted)
-                    if count > 1 {
-                        Picker("", selection: $testVectorBIndex) {
-                            ForEach(0..<count, id: \.self) { i in
-                                Text(allVectors[i].label).tag(i)
+            }
+            if !person.emails.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(person.emails, id: \.self) { email in
+                        Text(email).textSelection(.enabled)
+                    }
+                }
+            }
+            meetingHistorySection
+            VStack(alignment: .leading, spacing: 12) {
+                Divider()
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        Text("Voice recognition").font(.headline)
+                        Spacer(minLength: 8)
+                        connectVoiceButton(person)
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Voice recognition").font(.headline)
+                        connectVoiceButton(person)
+                    }
+                }
+                if let operationFeedback {
+                    Label(operationFeedback, systemImage: "checkmark.circle")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Text("Saved on this device. Voice profiles aren’t synced between your Mac and iPhone.")
+                    .font(.caption).foregroundStyle(.secondary)
+                let savedVoices = voiceprints.filter { $0.personId == person.id }
+                if savedVoices.isEmpty {
+                    Text("No remembered voice")
+                        .font(.callout.weight(.medium))
+                    Text("Choose Connect voice to select and confirm a speaker from a recorded meeting. Samples need at least 20 seconds of usable speech. Nothing is remembered until you confirm.")
+                        .foregroundStyle(.secondary)
+                }
+                if !savedVoices.isEmpty {
+                    Label("\(savedVoices.count) remembered \(savedVoices.count == 1 ? "voice" : "voices")", systemImage: "waveform")
+                        .font(.callout.weight(.medium))
+                    let eligibleCount = savedVoices.filter { SpeakerReviewPresentation.profileWarning($0) == nil }.count
+                    Text(eligibleCount == 0 ? "No saved voice is eligible for automatic recognition yet. Record and confirm a new sample to enable it." : "Strong matches fill speaker names automatically in future transcripts. You can confirm or correct them in People within each meeting.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(savedVoices) { voiceprint in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(voiceprint.createdAt, style: .date).font(.callout.weight(.medium))
+                            Text("\(SpeakerReviewPresentation.speechDuration(voiceprint.speechSeconds)) of speech")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let warning = SpeakerReviewPresentation.profileWarning(voiceprint) {
+                                Text(warning)
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         }
-                        .labelsHidden()
-                    } else {
-                        Picker("", selection: $testSamplePreset) {
-                            Text("Baritone Reference").tag("Baritone Reference")
-                            Text("Tenor Sample").tag("Tenor Sample")
-                            Text("Whisper Vector").tag("Whisper Vector")
-                            Text("Orthogonal Sample").tag("Orthogonal Sample")
+                        Spacer()
+                        Button("Forget…", role: .destructive) {
+                            voiceprintToDelete = voiceprint
+                            showingDeleteAlert = true
                         }
-                        .labelsHidden()
+                    }
+                    Divider()
+                }
+            }
+            if meetingId != nil && !clusters.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Speakers in this meeting").font(.headline)
+                    ForEach(clusters.filter { $0.personId == person.id }) { cluster in
+                        Text(cluster.label)
+                    }
+                    HStack {
+                        Button("Merge speakers…") {
+                            mergeSourceClusterIds = Set(clusters.prefix(2).map { $0.id })
+                            mergeTargetName = person.displayName
+                            showingMergeSheet = true
+                        }
+                        .disabled(clusters.count < 2)
+                        Button("Split speaker…") {
+                            guard let first = clusters.first(where: { $0.personId == person.id }) ?? clusters.first else { return }
+                            splitClusterId = first.id
+                            let segments = utterances.filter { $0.clusterId == first.id }
+                            splitTimestamp = ((segments.map(\.start).min() ?? 0) + (segments.map(\.end).max() ?? 2)) / 2
+                            showingSplitSheet = true
+                        }
                     }
                 }
             }
-            
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(28)
+    }
+
+    private func connectVoiceButton(_ person: Person) -> some View {
+        Button {
+            voiceCandidates = VoiceEnrollment.candidates(store: store, personID: person.id)
+            showingVoicePicker = true
+        } label: {
+            Label("Connect voice", systemImage: "waveform.badge.plus")
+                .font(.callout.weight(.medium)).padding(.horizontal, 12).frame(minHeight: 44)
+                .minutesControlGlass(in: Capsule(), interactive: true)
+        }.buttonStyle(.plain).fixedSize()
+    }
+
+    private var meetingHistorySection: some View {
+        VStack(alignment: .leading, spacing: 14) {
             Divider()
-            
-            // Results Display
-            HStack(spacing: 24) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Cosine Similarity")
-                        .font(.caption)
-                        .foregroundStyle(MinutesTheme.muted)
-                    Text(String(format: "%.4f", similarity))
-                        .font(.title2.bold().monospacedDigit())
-                        .foregroundStyle(similarityColor(similarity))
-                }
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Cosine Distance (1.0 - Sim)")
-                        .font(.caption)
-                        .foregroundStyle(MinutesTheme.muted)
-                    Text(String(format: "%.4f", distance))
-                        .font(.title2.bold().monospacedDigit())
-                        .foregroundStyle(MinutesTheme.text)
-                }
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Match Verdict")
-                        .font(.caption)
-                        .foregroundStyle(MinutesTheme.muted)
-                    Text(verdictText(similarity))
-                        .font(.headline)
-                        .foregroundStyle(similarityColor(similarity))
-                }
+            HStack(spacing: 12) {
+                Text("Recent recorded meetings").font(.headline)
+                Spacer(minLength: 0)
+                Button(action: refreshMeetingHistory) {
+                    Image(systemName: "arrow.clockwise").font(.callout)
+                        .frame(width: 30, height: 30)
+                        .minutesControlGlass(in: Circle(), interactive: true)
+                }.buttonStyle(.plain).accessibilityLabel("Refresh this person’s recorded meetings")
             }
-            
-            // Visual Similarity Gauge Bar
-            VStack(alignment: .leading, spacing: 4) {
-                GeometryReader { geo in
-                    let w = geo.size.width
-                    let barPos = max(0, min(w, CGFloat((similarity + 1.0) / 2.0) * w))
-                    
-                    ZStack(alignment: .leading) {
-                        // Colored threshold bands
-                        HStack(spacing: 0) {
-                            Rectangle().fill(Color.red.opacity(0.3)).frame(width: w * 0.65)
-                            Rectangle().fill(Color.orange.opacity(0.3)).frame(width: w * 0.15)
-                            Rectangle().fill(MinutesTheme.emerald.opacity(0.3)).frame(width: w * 0.20)
+            if let historyError {
+                Text("Couldn’t load recorded meetings. \(historyError)")
+                    .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                Button("Try again", action: refreshMeetingHistory).buttonStyle(.plain)
+            } else if recentMeetings.isEmpty {
+                Text("No linked recordings yet")
+                    .font(.callout.weight(.medium))
+                Text("Calendar invitations and speaker assignments link local recordings to this person.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                ForEach(recentMeetings) { entry in
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let onOpenMeeting {
+                            Button { onOpenMeeting(entry.meeting) } label: {
+                                HStack(alignment: .center, spacing: 12) {
+                                    meetingHistoryLabel(entry)
+                                    Spacer(minLength: 8)
+                                    Image(systemName: "chevron.forward")
+                                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                }.contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                                .accessibilityHint("Open this recorded meeting")
+                        } else {
+                            meetingHistoryLabel(entry)
                         }
-                        .clipShape(Capsule())
-                        
-                        // Marker
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 12, height: 12)
-                            .shadow(radius: 3)
-                            .offset(x: max(0, barPos - 6))
+                        Divider()
                     }
                 }
-                .frame(height: 12)
-                
-                HStack {
-                    Text("-1.0 (Opposite)")
-                        .font(.system(size: 9))
-                        .foregroundStyle(MinutesTheme.muted)
-                    Spacer()
-                    Text("0.52 (Suggested)")
-                        .font(.system(size: 9))
-                        .foregroundStyle(Color.orange)
-                    Spacer()
-                    Text("0.68 (Auto Match)")
-                        .font(.system(size: 9))
-                        .foregroundStyle(MinutesTheme.emerald)
-                    Spacer()
-                    Text("+1.0 (Identical)")
-                        .font(.system(size: 9))
-                        .foregroundStyle(MinutesTheme.muted)
-                }
+                Text("A calendar invitation does not confirm attendance. Voice assignments can be reviewed in each recording.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .padding(14)
-        .background(MinutesTheme.cardHover)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
-    
-    private func collectVectors() -> [(label: String, vector: [Float])] {
-        var items: [(label: String, vector: [Float])] = []
-        for c in clusters where !c.centroid.isEmpty {
-            items.append((label: "Cluster: \(c.label)", vector: c.centroid))
+
+    private func meetingHistoryLabel(_ entry: PersonMeetingHistoryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(entry.meeting.title).font(.callout.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+            Text(entry.meeting.startedAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())
+                .font(.caption).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { meetingContexts(entry) }
+                VStack(alignment: .leading, spacing: 4) { meetingContexts(entry) }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3)
+    }
+
+    @ViewBuilder private func meetingContexts(_ entry: PersonMeetingHistoryEntry) -> some View {
+        if entry.calendarInvitee {
+            Label("Calendar invitee", systemImage: "calendar").font(.caption).foregroundStyle(.secondary)
         }
-        for vp in voiceprints where !vp.vector.isEmpty {
-            let name = people.first(where: { $0.id == vp.personId })?.displayName ?? "Voiceprint"
-            items.append((label: "Enrolled: \(name)", vector: vp.vector))
+        if entry.confirmedSpeaker {
+            Label("Confirmed speaker", systemImage: "person.crop.circle.badge.checkmark").font(.caption).foregroundStyle(.secondary)
         }
-        return items
-    }
-    
-    private func makePresetVector(_ preset: String) -> [Float] {
-        var vec = [Float](repeating: 0.0, count: 256)
-        switch preset {
-        case "Baritone Reference":
-            for i in 0..<256 { vec[i] = Float(sin(Double(i) * 0.05)) }
-        case "Tenor Sample":
-            for i in 0..<256 { vec[i] = Float(cos(Double(i) * 0.05)) }
-        case "Whisper Vector":
-            for i in 0..<256 { vec[i] = Float(sin(Double(i) * 0.12)) }
-        default:
-            for i in 0..<256 { vec[i] = (i % 2 == 0) ? 0.08 : -0.08 }
+        if entry.recognizedSpeaker {
+            Label("Recognized voice", systemImage: "waveform").font(.caption).foregroundStyle(.secondary)
         }
-        return VectorMath.l2Normalize(vec)
+        if entry.speakerLinked && !entry.confirmedSpeaker && !entry.recognizedSpeaker {
+            Label("Speaker association needs review", systemImage: "person.crop.circle.badge.questionmark")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
-    
-    private func similarityColor(_ s: Double) -> Color {
-        if s >= 0.68 { return MinutesTheme.emerald }
-        if s >= 0.52 { return Color.orange }
-        return Color.red
+
+    private func refreshMeetingHistory() {
+        guard let personID = personSelection.wrappedValue else {
+            recentMeetings = []; historyError = nil; return
+        }
+        do {
+            recentMeetings = try store.listMeetings(forPersonId: personID, limit: 20)
+            historyError = nil
+        } catch {
+            recentMeetings = []
+            historyError = error.localizedDescription
+        }
     }
-    
-    private func verdictText(_ s: Double) -> String {
-        if s >= 0.68 { return "✓ Match (Confirmed Speaker)" }
-        if s >= 0.52 { return "⚡ Suggested Candidate" }
-        return "✕ Different Speaker"
+
+    private var voicePicker: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Choose a recorded speaker").font(.title2.bold())
+                    Text("Listen to a sample, then confirm it belongs to this person. Their voice stays on this device and helps identify future meetings.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    if voiceCandidates.isEmpty {
+                        ContentUnavailableView("No eligible samples yet", systemImage: "waveform",
+                            description: Text("Record at least 20 seconds of clear speech, finish transcription, then return here. Older voice models and speakers assigned to someone else are excluded."))
+                    }
+                    ForEach(voiceCandidates) { candidate in
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(candidate.meeting.title).font(.headline).lineLimit(2)
+                            Text(candidate.meeting.startedAt, format: .dateTime.month(.abbreviated).day().year())
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text("\(candidate.cluster.label) · \(SpeakerReviewPresentation.speechDuration(candidate.cluster.speechSeconds)) of speech")
+                                .font(.callout).foregroundStyle(.secondary)
+                            VoiceSamplePlaybackView(meeting: candidate.meeting, cluster: candidate.cluster,
+                                utterances: store.listUtterances(meetingId: candidate.meeting.id),
+                                playbackAllowed: playbackAllowed)
+                            Button { confirmingVoice = candidate } label: {
+                                Label("Use this voice", systemImage: "checkmark")
+                                    .font(.callout.weight(.medium))
+                                    .padding(.horizontal, 14).frame(minHeight: 44)
+                                    .minutesControlGlass(in: Capsule(), interactive: true)
+                            }.buttonStyle(.plain)
+                        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                            .minutesControlGlass(in: RoundedRectangle(cornerRadius: 16))
+                    }
+                }.padding(24)
+            }
+            .navigationTitle("Connect a voice")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showingVoicePicker = false } } }
+            .alert("Remember this voice?", isPresented: Binding(get: { confirmingVoice != nil }, set: { if !$0 { confirmingVoice = nil } })) {
+                Button("Remember voice") {
+                    guard let sample = confirmingVoice, let personID = personSelection.wrappedValue else { return }
+                    do {
+                        try VoiceEnrollment.remember(store: store, personID: personID, meetingID: sample.meeting.id,
+                            clusterID: sample.cluster.id, expected: sample.cluster)
+                        operationFeedback = "Voice connected. Future meetings can recognize this person."
+                        confirmingVoice = nil; showingVoicePicker = false; refreshData()
+                    } catch { operationError = error.localizedDescription; confirmingVoice = nil; showingVoicePicker = false }
+                }
+                Button("Cancel", role: .cancel) { confirmingVoice = nil }
+            } message: {
+                Text("Confirm this is \(people.first(where: { $0.id == personSelection.wrappedValue })?.displayName ?? "this person") speaking. This assigns the selected speaker and saves a local voice profile. Only remember someone’s voice with their consent.")
+            }
+        }.frame(idealWidth: 580, idealHeight: 620)
     }
-    
+
     // MARK: - Merge Sheet View
     
     private var mergeSheetView: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Select clusters to merge. Their 256-dim embedding centroids will be combined using weighted averaging and L2 normalization.")
+                Text("Combine speaker segments that belong to the same person.")
                     .font(.subheadline)
                     .foregroundStyle(MinutesTheme.muted)
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Target Speaker Name:")
+                    Text("Speaker name")
                         .font(.caption.bold())
                     TextField("Speaker Name", text: $mergeTargetName)
                         .textFieldStyle(.roundedBorder)
                 }
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Select Clusters to Merge:")
+                    Text("Speakers to combine")
                         .font(.caption.bold())
                     ForEach(clusters) { c in
                         Toggle(isOn: Binding(
@@ -641,47 +415,44 @@ public struct VoiceprintHubView: View {
                                 else { mergeSourceClusterIds.remove(c.id) }
                             }
                         )) {
-                            Text("\(c.label) (\(String(format: "%.1fs", c.speechSeconds)))")
+                            Text("\(c.label) (\(SpeakerReviewPresentation.speechDuration(c.speechSeconds)))")
                         }
                     }
                 }
                 
                 Spacer()
                 
-                Button("Merge Clusters") {
+                Button("Merge speakers") {
                     let toMerge = clusters.filter { mergeSourceClusterIds.contains($0.id) }
                     guard toMerge.count >= 2 else { return }
                     
                     let merged = clusterManager.merge(clusters: toMerge, targetName: mergeTargetName)
                     
-                    // Remove old clusters and save merged
                     var newClusters = clusters.filter { !mergeSourceClusterIds.contains($0.id) }
                     newClusters.append(merged)
-                    clusters = newClusters
-                    
-                    // Re-attribute utterances
-                    for i in 0..<utterances.count {
-                        if mergeSourceClusterIds.contains(utterances[i].clusterId) {
-                            utterances[i].clusterId = merged.id
-                            utterances[i].speakerName = merged.label
+                    var updatedUtterances = utterances
+                    for i in updatedUtterances.indices where mergeSourceClusterIds.contains(updatedUtterances[i].clusterId) {
+                        updatedUtterances[i].clusterId = merged.id
+                        updatedUtterances[i].speakerName = merged.label
+                    }
+                    do {
+                        try store.withImmediateTransaction {
+                            try store.saveSpeakerClusters(newClusters)
+                            try store.saveUtterances(updatedUtterances)
+                            for oldId in mergeSourceClusterIds { try store.deleteSpeakerCluster(id: oldId) }
                         }
-                    }
-                    
-                    try? store.saveSpeakerClusters(newClusters)
-                    try? store.saveUtterances(utterances)
-                    for oldId in mergeSourceClusterIds {
-                        try? store.deleteSpeakerCluster(id: oldId)
-                    }
-                    
-                    showingMergeSheet = false
-                    refreshData()
+                        showingMergeSheet = false
+                        operationFeedback = "Speakers combined. Review the updated transcript to confirm the result."
+                        refreshData()
+                    } catch { operationError = error.localizedDescription }
+
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(mergeSourceClusterIds.count < 2 || mergeTargetName.isEmpty)
                 .frame(maxWidth: .infinity)
             }
             .padding(24)
-            .navigationTitle("Merge Speaker Clusters")
+            .navigationTitle("Merge speakers")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingMergeSheet = false }
@@ -701,7 +472,7 @@ public struct VoiceprintHubView: View {
                     .foregroundStyle(MinutesTheme.muted)
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Select Cluster:")
+                    Text("Speaker")
                         .font(.caption.bold())
                     Picker("", selection: $splitClusterId) {
                         ForEach(clusters) { c in
@@ -713,15 +484,15 @@ public struct VoiceprintHubView: View {
                 
                 VStack(alignment: .leading, spacing: 8) {
                     let targetCluster = clusters.first(where: { $0.id == splitClusterId })
-                    let maxSecs = max(60.0, targetCluster?.speechSeconds ?? 120.0)
-                    Text("Split Timestamp: \(String(format: "%.1f", splitTimestamp))s")
+                    let maxSecs = max(1, utterances.filter { $0.clusterId == targetCluster?.id }.map(\.end).max() ?? 1)
+                    Text("Split at \(String(format: "%.1f", splitTimestamp)) seconds")
                         .font(.caption.bold())
                     Slider(value: $splitTimestamp, in: 0.0...maxSecs, step: 1.0)
                 }
                 
                 Spacer()
                 
-                Button("Split Cluster") {
+                Button("Split speaker") {
                     guard let target = clusters.first(where: { $0.id == splitClusterId }) else { return }
                     let (c1, c2, updatedUtterances) = clusterManager.split(
                         cluster: target,
@@ -731,21 +502,23 @@ public struct VoiceprintHubView: View {
                     
                     var newClusters = clusters.filter { $0.id != target.id }
                     newClusters.append(contentsOf: [c1, c2])
-                    clusters = newClusters
-                    utterances = updatedUtterances
-                    
-                    try? store.deleteSpeakerCluster(id: target.id)
-                    try? store.saveSpeakerClusters(newClusters)
-                    try? store.saveUtterances(updatedUtterances)
-                    
-                    showingSplitSheet = false
-                    refreshData()
+                    do {
+                        try store.withImmediateTransaction {
+                            try store.deleteSpeakerCluster(id: target.id)
+                            try store.saveSpeakerClusters(newClusters)
+                            try store.saveUtterances(updatedUtterances)
+                        }
+                        showingSplitSheet = false
+                        operationFeedback = "Speaker split. Review both speakers in the meeting."
+                        refreshData()
+                    } catch { operationError = error.localizedDescription }
+
                 }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
             }
             .padding(24)
-            .navigationTitle("Split Speaker Cluster")
+            .navigationTitle("Split speaker")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingSplitSheet = false }
@@ -758,8 +531,11 @@ public struct VoiceprintHubView: View {
     private func refreshData() {
         voiceprints = store.listVoiceprints()
         people = store.listPeople()
-        let targetId = meetingId ?? store.listMeetings().first?.id
-        if let targetId = targetId {
+        if personSelection.wrappedValue == nil || !people.contains(where: { $0.id == personSelection.wrappedValue }) {
+            personSelection.wrappedValue = people.first?.id
+        }
+        refreshMeetingHistory()
+        if let targetId = meetingId {
             clusters = store.listSpeakerClusters(meetingId: targetId)
             utterances = store.listUtterances(meetingId: targetId)
         }

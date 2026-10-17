@@ -1,0 +1,18 @@
+{
+  "build": 37,
+  "meetingID": "67e97aec-5311-4e6f-afdb-ea32a2e4f8b9",
+  "completed": true,
+  "issues": [],
+  "durationSeconds": 31.64000000001397,
+  "sources": [
+    "system"
+  ],
+  "microphoneFiles": 0,
+  "hardwareOutputMuted": true,
+  "generatedReferenceCorrelation": 0.9970562940783102,
+  "rms": 0.0753259201923417,
+  "referenceWords": 46,
+  "recognizedWords": 42,
+  "matchedReferenceWords": 39,
+  "summaryCount": 1
+}

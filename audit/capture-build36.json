@@ -1,0 +1,23 @@
+{
+  "build": 36,
+  "meetingID": "5998ba83-371c-48ae-8996-87d067b28502",
+  "tracks": [
+    {
+      "track": "microphone",
+      "utterances": 4,
+      "words": 60,
+      "referenceWords": 46,
+      "matchedWords": 38,
+      "recall": 0.8260869565217391
+    },
+    {
+      "track": "system",
+      "utterances": 1,
+      "words": 45,
+      "referenceWords": 46,
+      "matchedWords": 42,
+      "recall": 0.9130434782608695
+    }
+  ],
+  "summaryCount": 1
+}

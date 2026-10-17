@@ -139,9 +139,24 @@ public struct PrismMeetingPayload: Codable, Sendable, Equatable {
         notesMarkdown: String,
         summaryMarkdown: String
     ) -> String {
-        let canonical = "\(title)|\(startedAt)|\(people.map { $0.displayName }.joined(separator: ","))|\(utterances.count)|\(notesMarkdown)|\(summaryMarkdown)"
-        let digest = SHA256.hash(data: Data(canonical.utf8))
-        return digest.compactMap { String(format: "%02x", $0) }.joined()
+        // Encode structured content: delimiters and unchanged word counts must not
+        // make two different transcripts (or identity corrections) look identical.
+        struct Content: Encodable {
+            let title: String
+            let startedAt: String
+            let people: [PrismPersonContext]
+            let utterances: [PrismUtteranceContext]
+            let notesMarkdown: String
+            let summaryMarkdown: String
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let content = Content(title: title, startedAt: startedAt, people: people,
+            utterances: utterances, notesMarkdown: notesMarkdown, summaryMarkdown: summaryMarkdown)
+        // These fields contain only strings, integer timestamps, and arrays.
+        let canonical = try! encoder.encode(content)
+        let digest = SHA256.hash(data: canonical)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -179,6 +194,7 @@ public struct PrismImportResponse: Codable, Sendable {
 // MARK: - Prism Errors
 
 public enum PrismError: Error, LocalizedError, Sendable {
+    case acceptedPending(importId: String)
     case needsSignIn(String)
     case forbidden(String)
     case conflict(serverRevision: Int?, message: String)
@@ -188,6 +204,8 @@ public enum PrismError: Error, LocalizedError, Sendable {
     
     public var errorDescription: String? {
         switch self {
+        case .acceptedPending(let importId):
+            return "Accepted by Prism; awaiting committed receipt for \(importId)"
         case .needsSignIn(let msg):
             return "Sign-in required: \(msg)"
         case .forbidden(let msg):
@@ -222,11 +240,11 @@ public final class PrismClient: PrismClientProtocol {
     
     public init(
         baseURL: URL,
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         tokenProvider: @escaping @Sendable () async -> String?
     ) {
         self.baseURL = baseURL
-        self.session = session
+        self.session = session ?? ExportHTTPTransport.makeSession()
         self.tokenProvider = tokenProvider
     }
     
@@ -236,6 +254,8 @@ public final class PrismClient: PrismClientProtocol {
         idempotencyKey: String,
         baseRevision: Int? = nil
     ) async throws -> PrismReceipt {
+        do {try ExportHTTPTransport.validateOrigin(baseURL)} catch {throw PrismError.invalidPayload("Use a secure Prism origin without embedded credentials")}
+        guard payload.sourceMeetingId.range(of:"^[A-Za-z0-9_-]+$",options:.regularExpression) != nil else {throw PrismError.invalidPayload("Invalid source meeting identifier")}
         guard let token = await tokenProvider() else {
             throw PrismError.needsSignIn("Missing authentication token")
         }
@@ -247,6 +267,7 @@ public final class PrismClient: PrismClientProtocol {
         
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
+        request.timeoutInterval = 30
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(destinationVault, forHTTPHeaderField: "X-Prism-Vault")
         request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
@@ -278,7 +299,7 @@ public final class PrismClient: PrismClientProtocol {
         }
         
         let statusCode = httpResponse.statusCode
-        let responseString = String(data: data, encoding: .utf8) ?? ""
+        // Error bodies may contain private server data or reflected credentials. Never persist them in outbox diagnostics.
         
         switch statusCode {
         case 200, 201:
@@ -289,33 +310,34 @@ public final class PrismClient: PrismClientProtocol {
             } catch {
                 throw PrismError.unhandledResponse(statusCode: statusCode, message: "Malformed response JSON: \(error.localizedDescription)")
             }
+            guard decoded.status == "committed", !decoded.importId.isEmpty,
+                  let meetingNoteId = decoded.meetingNoteId, !meetingNoteId.isEmpty,
+                  let transcriptNoteId = decoded.transcriptNoteId, !transcriptNoteId.isEmpty,
+                  let revision = decoded.serverRevision, revision > 0 else {
+                throw PrismError.unhandledResponse(statusCode: statusCode, message: "Missing committed receipt fields")
+            }
             return PrismReceipt(
                 importId: decoded.importId,
-                meetingNoteId: decoded.meetingNoteId ?? "note_\(decoded.importId)",
-                transcriptNoteId: decoded.transcriptNoteId ?? "transcript_\(decoded.importId)",
-                serverRevision: decoded.serverRevision ?? payload.sourceRevision,
+                meetingNoteId: meetingNoteId,
+                transcriptNoteId: transcriptNoteId,
+                serverRevision: revision,
                 contentHash: payload.contentHash,
                 committedAt: Date()
             )
             
         case 202:
             // Accepted / Pending
-            let decoded = try? JSONDecoder().decode(PrismImportResponse.self, from: data)
-            let importId = decoded?.importId ?? UUID().uuidString
-            return PrismReceipt(
-                importId: importId,
-                meetingNoteId: decoded?.meetingNoteId ?? "",
-                transcriptNoteId: decoded?.transcriptNoteId ?? "",
-                serverRevision: decoded?.serverRevision ?? 0,
-                contentHash: payload.contentHash,
-                committedAt: Date()
-            )
+            guard let decoded = try? JSONDecoder().decode(PrismImportResponse.self, from: data),
+                  !decoded.importId.isEmpty else {
+                throw PrismError.unhandledResponse(statusCode: 202, message: "Missing pending import identifier")
+            }
+            throw PrismError.acceptedPending(importId: decoded.importId)
             
         case 401:
-            throw PrismError.needsSignIn("Authentication required or expired token: \(responseString)")
+            throw PrismError.needsSignIn("Authentication required or expired token")
             
         case 403:
-            throw PrismError.forbidden("Access denied to destination vault '\(destinationVault)': \(responseString)")
+            throw PrismError.forbidden("Access denied to the selected destination vault")
             
         case 409:
             // Extract server revision if present
@@ -324,16 +346,16 @@ public final class PrismClient: PrismClientProtocol {
                let rev = obj["serverRevision"] as? Int {
                 serverRev = rev
             }
-            throw PrismError.conflict(serverRevision: serverRev, message: "Meeting conflict detected on server: \(responseString)")
+            throw PrismError.conflict(serverRevision: serverRev, message: "Meeting conflict detected on server")
             
         case 400, 422:
-            throw PrismError.invalidPayload("Rejected payload (\(statusCode)): \(responseString)")
+            throw PrismError.invalidPayload("Rejected payload (\(statusCode))")
             
         case 408, 429, 500, 502, 503, 504:
-            throw PrismError.failedRetryable(statusCode: statusCode, message: "Transient server error: \(responseString)")
+            throw PrismError.failedRetryable(statusCode: statusCode, message: "Transient server error")
             
         default:
-            throw PrismError.unhandledResponse(statusCode: statusCode, message: "Unexpected status: \(responseString)")
+            throw PrismError.unhandledResponse(statusCode: statusCode, message: "Unexpected server status")
         }
     }
 }

@@ -7,6 +7,7 @@ import MinutesExport
 public struct TranscriptView: View {
     @State public var utterances: [Utterance]
     public let availableSpeakers: [String]
+    public let timestampsAvailable: Bool
     public let onSeek: (Double) -> Void
     public let onUtteranceEdited: ((Utterance) -> Void)?
     public let onSpeakerReassigned: ((Int, String) -> Void)?
@@ -19,22 +20,27 @@ public struct TranscriptView: View {
     // Inline Edit State
     @State private var editingUtteranceId: Int? = nil
     @State private var editingText: String = ""
+    @State private var showingEditor = false
+    @FocusState private var editorFocused: Bool
     
-    // Export Status Banner State
-    @State private var exportStatusMessage: String? = nil
-    @State private var isExportSuccess: Bool = true
+    private let incomingUtterances: [Utterance]
     
     public init(
         utterances: [Utterance],
         availableSpeakers: [String] = [],
+        clusters: [SpeakerCluster] = [],
+        timestampsAvailable: Bool = true,
         onSeek: @escaping (Double) -> Void = { _ in },
         onUtteranceEdited: ((Utterance) -> Void)? = nil,
         onSpeakerReassigned: ((Int, String) -> Void)? = nil,
         onExportParachute: (() -> Void)? = nil,
         onExportMarkdown: (() -> Void)? = nil
     ) {
-        self._utterances = State(initialValue: utterances)
+        let readable = TranscriptSpeakerLabels.readableUtterances(utterances, clusters: clusters)
+        self._utterances = State(initialValue: readable)
+        self.incomingUtterances = readable
         self.availableSpeakers = availableSpeakers
+        self.timestampsAvailable = timestampsAvailable
         self.onSeek = onSeek
         self.onUtteranceEdited = onUtteranceEdited
         self.onSpeakerReassigned = onSpeakerReassigned
@@ -54,112 +60,59 @@ public struct TranscriptView: View {
     
     public var body: some View {
         VStack(spacing: 0) {
-            // Header: Search Bar & One-Click Exports
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    // Search Bar
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundStyle(MinutesTheme.muted)
-                        TextField("Search transcript text or speaker...", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .foregroundStyle(MinutesTheme.text)
-                        if !searchText.isEmpty {
-                            Button(action: { searchText = "" }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(MinutesTheme.muted)
-                            }
-                            .buttonStyle(.plain)
-                        }
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Find in transcript", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(MinutesTheme.cardHover)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(MinutesTheme.border, lineWidth: 1))
-                    
-                    // One-Click Native Exports
-                    if let onExportParachute = onExportParachute {
-                        Button(action: {
-                            onExportParachute()
-                            exportStatusMessage = "Exported to Parachute Vault (localhost:1940)"
-                            isExportSuccess = true
-                        }) {
-                            Label("Parachute Vault", systemImage: "archivebox.fill")
-                                .font(.caption.bold())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(MinutesTheme.primary)
-                    }
-                    
-                    if let onExportMarkdown = onExportMarkdown {
-                        Button(action: {
-                            onExportMarkdown()
-                            exportStatusMessage = "Exported Markdown (~/Documents/Minutes)"
-                            isExportSuccess = true
-                        }) {
-                            Label("Obsidian", systemImage: "doc.text.fill")
-                                .font(.caption.bold())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-                
-                // Status Toast / Banner
-                if let msg = exportStatusMessage {
-                    HStack(spacing: 6) {
-                        Image(systemName: isExportSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .foregroundStyle(isExportSuccess ? MinutesTheme.emerald : Color.red)
-                        Text(msg)
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.text)
-                        Spacer()
-                        Button(action: { exportStatusMessage = nil }) {
-                            Image(systemName: "xmark")
-                                .font(.caption2)
-                                .foregroundStyle(MinutesTheme.muted)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(isExportSuccess ? MinutesTheme.emeraldBg : Color.red.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Clear search")
                 }
             }
-            .padding(16)
-            .background(MinutesTheme.card)
-            .overlay(
-                Rectangle()
-                    .frame(height: 1)
-                    .foregroundStyle(MinutesTheme.border),
-                alignment: .bottom
-            )
-            
-            // Utterance Stream
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .minutesGlass()
+            .padding(12)
+            Divider()
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 22) {
                     if filteredUtterances.isEmpty {
-                        Text("No matching utterances found.")
-                            .font(.subheadline)
-                            .foregroundStyle(MinutesTheme.muted)
-                            .padding(24)
-                    } else {
-                        ForEach(filteredUtterances) { u in
-                            utteranceRow(u)
-                        }
+                        ContentUnavailableView(searchText.isEmpty ? "No transcript yet" : "No matches",
+                                               systemImage: searchText.isEmpty ? "text.alignleft" : "magnifyingglass",
+                                               description: Text(searchText.isEmpty ? "Recorded speech appears here after processing." : "Try a different word or speaker name."))
+                    }
+                    ForEach(filteredUtterances) { utterance in
+                        utteranceRow(utterance)
                     }
                 }
-                .padding(20)
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                .padding(28)
             }
-            .background(MinutesTheme.bg)
+        }
+        .background(MinutesTheme.document)
+        .sheet(isPresented: $showingEditor) { transcriptEditor }
+        .onChange(of: incomingRevision) { _, _ in
+            // Keep the editor's draft while refreshing saved text and speaker names.
+            utterances = incomingUtterances
+            if let id = editingUtteranceId, !utterances.contains(where: { $0.id == id }) {
+                editingUtteranceId = nil
+                showingEditor = false
+            }
         }
     }
-    
+
+    private var incomingRevision: Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try? encoder.encode(incomingUtterances)
+    }
+
     // MARK: - Utterance Row
     
     @ViewBuilder
@@ -176,102 +129,88 @@ public struct TranscriptView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text(u.speakerName)
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(speakerColor(u.speakerName))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9))
-                            .foregroundStyle(speakerColor(u.speakerName).opacity(0.7))
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(speakerColor(u.speakerName).opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
                 }
                 .buttonStyle(.plain)
                 
-                // Timestamp Seek Button
-                Button(action: { onSeek(u.start) }) {
-                    Text(formatTime(u.start))
-                        .font(.system(size: 11, design: .monospaced))
+                // Untimed text imports never imply a verified audio position.
+                Button(action: { if timestampsAvailable { onSeek(u.start) } }) {
+                    Text(timestampsAvailable ? formatTime(u.start) : "Untimed")
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(MinutesTheme.muted)
                 }
                 .buttonStyle(.plain)
+                .disabled(!timestampsAvailable)
                 
                 Spacer()
                 
-                // Edit Button Toggle
-                Button(action: {
-                    if editingUtteranceId == u.id {
-                        commitInlineEdit(for: u.id)
-                    } else {
-                        editingUtteranceId = u.id
-                        editingText = u.text
-                    }
-                }) {
-                    Image(systemName: editingUtteranceId == u.id ? "checkmark.circle.fill" : "pencil")
-                        .font(.caption)
-                        .foregroundStyle(editingUtteranceId == u.id ? MinutesTheme.emerald : MinutesTheme.muted)
+                Button { beginEditing(u) } label: {
+                    Image(systemName: "pencil")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
+                .help("Edit transcript")
+                .accessibilityLabel("Edit transcript at \(timestampsAvailable ? formatTime(u.start) : "untimed segment")")
             }
-            
-            // Text or Inline Editor
-            if editingUtteranceId == u.id {
-                VStack(alignment: .leading, spacing: 6) {
-                    TextField("Utterance text", text: $editingText, axis: .vertical)
-                        .lineLimit(3...8)
-                        .font(.system(size: 14))
-                        .padding(8)
-                        .background(MinutesTheme.cardHover)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(MinutesTheme.primary, lineWidth: 1))
-                        .onSubmit {
-                            commitInlineEdit(for: u.id)
-                        }
-                    
-                    HStack {
-                        Button("Save") {
-                            commitInlineEdit(for: u.id)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(MinutesTheme.primary)
-                        .controlSize(.small)
-                        
-                        Button("Cancel") {
-                            editingUtteranceId = nil
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
+            Text(u.text)
+                .font(.body)
+                .lineSpacing(5)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contextMenu { Button("Edit Transcript…") { beginEditing(u) } }
+
+        }
+    }
+
+    private func beginEditing(_ utterance: Utterance) {
+        editingUtteranceId = utterance.id
+        editingText = utterance.text
+        showingEditor = true
+    }
+
+    private var transcriptEditor: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Edit transcript").font(.title2.weight(.semibold))
+                Spacer()
+                if let utterance = utterances.first(where: { $0.id == editingUtteranceId }) {
+                    Text(utterance.speakerName).foregroundStyle(.secondary)
                 }
-            } else {
-                Text(u.text)
-                    .font(.system(size: 14))
-                    .lineSpacing(4)
-                    .foregroundStyle(MinutesTheme.text)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        editingUtteranceId = u.id
-                        editingText = u.text
-                    }
+            }
+            Text("Correct the words in this segment. The original audio is unchanged.")
+                .font(.callout).foregroundStyle(.secondary)
+            TextEditor(text: $editingText)
+                .font(.body).lineSpacing(5)
+                .padding(8)
+                .background(MinutesTheme.document, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(MinutesTheme.border))
+                .focused($editorFocused)
+                .accessibilityLabel("Transcript text")
+                .frame(minHeight: 180)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { showingEditor = false; editingUtteranceId = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { if let id = editingUtteranceId { commitInlineEdit(for: id) } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(editingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(editingUtteranceId == u.id ? MinutesTheme.card : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            Rectangle()
-                .frame(height: 1)
-                .foregroundStyle(MinutesTheme.border.opacity(0.3)),
-            alignment: .bottom
-        )
+        .padding(24)
+        .frame(minWidth: 360, idealWidth: 520, minHeight: 300)
+        .onAppear { editorFocused = true }
     }
-    
+
     private func commitInlineEdit(for utteranceId: Int) {
         guard let idx = utterances.firstIndex(where: { $0.id == utteranceId }) else { return }
         utterances[idx].text = editingText
         editingUtteranceId = nil
+        showingEditor = false
         onUtteranceEdited?(utterances[idx])
     }
     
@@ -285,8 +224,7 @@ public struct TranscriptView: View {
     private func speakersForPicker(current: String) -> [String] {
         var set = Set(availableSpeakers)
         set.insert(current)
-        set.insert("Speaker 1")
-        set.insert("Speaker 2")
+        set.formUnion(utterances.map(\.speakerName))
         return Array(set).sorted()
     }
     
@@ -296,11 +234,6 @@ public struct TranscriptView: View {
         return String(format: "%02d:%02d", mins, s)
     }
     
-    private func speakerColor(_ name: String) -> Color {
-        let colors: [Color] = [MinutesTheme.blue, MinutesTheme.purple, MinutesTheme.emerald, MinutesTheme.primary]
-        let hash = abs(name.hashValue)
-        return colors[hash % colors.count]
-    }
 }
 
 // MARK: - Summary View
@@ -310,8 +243,6 @@ public struct SummaryView: View {
     public let summary: MeetingSummary
     public let onExportParachute: () -> Void
     public let onExportMarkdown: () -> Void
-    
-    @State private var exportToast: String? = nil
     
     public init(
         summary: MeetingSummary,
@@ -325,115 +256,36 @@ public struct SummaryView: View {
     
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header Actions
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(summary.title)
-                            .font(.title2.bold())
-                            .foregroundStyle(MinutesTheme.text)
-                        Text("Generated On-Device · FluidAudio Parakeet Ultra")
-                            .font(.caption)
-                            .foregroundStyle(MinutesTheme.muted)
-                    }
-                    Spacer()
-                    Button("Export to Parachute", action: {
-                        onExportParachute()
-                        exportToast = "Exported to Parachute Vault (localhost:1940)"
-                    })
-                    .buttonStyle(.borderedProminent)
-                    .tint(MinutesTheme.primary)
-                    
-                    Button("Export Markdown", action: {
-                        onExportMarkdown()
-                        exportToast = "Saved to ~/Documents/Minutes"
-                    })
-                    .buttonStyle(.bordered)
-                }
-                
-                if let toast = exportToast {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(MinutesTheme.emerald)
-                        Text(toast)
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.text)
-                        Spacer()
-                    }
-                    .padding(10)
-                    .background(MinutesTheme.emeraldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                
-                // Overview
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("EXECUTIVE OVERVIEW")
-                        .font(.caption.bold())
-                        .foregroundStyle(MinutesTheme.primary)
-                    Text(summary.overview)
-                        .font(.body)
-                        .lineSpacing(4)
-                        .foregroundStyle(MinutesTheme.text)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(MinutesTheme.cardHover)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-                
-                // Decisions
+            VStack(alignment: .leading, spacing: 28) {
+                Text(summary.overview)
+                    .lineSpacing(5)
                 if !summary.decisions.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("KEY DECISIONS")
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.emerald)
-                        ForEach(summary.decisions, id: \.self) { d in
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(MinutesTheme.emerald)
-                                    .font(.subheadline)
-                                Text(d)
-                                    .font(.subheadline)
-                                    .foregroundStyle(MinutesTheme.text)
-                            }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Decisions").font(.headline)
+                        ForEach(summary.decisions, id: \.self) { decision in
+                            Text("• " + decision)
                         }
                     }
-                    .padding(14)
-                    .minutesCard()
                 }
-                
-                // Action items
                 if !summary.actionItems.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("ACTION ITEMS")
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.purple)
-                        ForEach(summary.actionItems, id: \.text) { a in
-                            HStack(spacing: 8) {
-                                Image(systemName: "circle")
-                                    .foregroundStyle(MinutesTheme.muted)
-                                Text(a.text)
-                                    .font(.subheadline)
-                                    .foregroundStyle(MinutesTheme.text)
-                                Spacer()
-                                if let owner = a.owner {
-                                    Text("@\(owner)")
-                                        .font(.caption.bold())
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(MinutesTheme.primary.opacity(0.15))
-                                        .foregroundStyle(MinutesTheme.primary)
-                                        .clipShape(Capsule())
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Action items").font(.headline)
+                        ForEach(summary.actionItems, id: \.text) { item in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("• " + item.text)
+                                if let owner = item.owner {
+                                    Text(owner).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
                         }
                     }
-                    .padding(14)
-                    .minutesCard()
                 }
             }
-            .padding(20)
+            .textSelection(.enabled)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(28)
         }
-        .background(MinutesTheme.bg)
     }
 }
 #endif

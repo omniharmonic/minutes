@@ -7,26 +7,56 @@ public final class OutboxManager: Sendable {
     public let client: PrismClientProtocol
     public let maxRetries: Int
     public let baseBackoff: TimeInterval
+    public let destinationOrigin: String?
+    public let grantFingerprint: String?
     
     public init(
         store: MinutesStore,
         client: PrismClientProtocol,
         maxRetries: Int = 5,
-        baseBackoff: TimeInterval = 1.0
+        baseBackoff: TimeInterval = 1.0,
+        destinationOrigin: String? = nil,
+        grantFingerprint: String? = nil
     ) {
         self.store = store
         self.client = client
         self.maxRetries = maxRetries
         self.baseBackoff = baseBackoff
+        self.destinationOrigin = destinationOrigin
+        self.grantFingerprint = grantFingerprint
     }
     
     // MARK: - Enqueue Meeting
     
-    public func enqueue(
-        bundle: MeetingExportBundle,
-        destinationVault: String,
-        sourceRevision: Int = 1
-    ) throws -> OutboxItem {
+    public func enqueue(bundle: MeetingExportBundle, destinationVault: String, sourceRevision: Int = 1, baseServerRevision: Int? = nil) throws -> OutboxItem {
+        try store.enqueueOutboxItem(makeItem(bundle: bundle, destinationVault: destinationVault, sourceRevision: sourceRevision, baseServerRevision: baseServerRevision))
+    }
+
+    /// An unchanged delivery reuses its identity. Changed content cannot overtake a pending import.
+    public func enqueueNextRevision(bundle: MeetingExportBundle, destinationVault: String, resolvingConflictAt serverRevision: Int? = nil) throws -> OutboxItem {
+        var result: OutboxItem?
+        try store.withImmediateTransaction {
+            let previous = store.listOutboxItems(meetingId: bundle.meeting.id).filter {
+                $0.destinationVault == destinationVault && $0.destinationOrigin == destinationOrigin && $0.grantFingerprint == grantFingerprint
+            }.max { $0.sourceRevision < $1.sourceRevision }
+            if let previous {
+                let comparison = try makeItem(bundle: bundle, destinationVault: destinationVault, sourceRevision: previous.sourceRevision, baseServerRevision: previous.baseServerRevision)
+                if comparison.payloadJson == previous.payloadJson && !(previous.status == .conflict && serverRevision != nil) { result = previous; return }
+                let base: Int
+                if previous.status == .synced, let committed = previous.receipt?.serverRevision, committed > 0 { base = committed }
+                else if previous.status == .conflict, let supplied = serverRevision, supplied > 0 { base = supplied }
+                else { throw PrismError.conflict(serverRevision: previous.receipt?.serverRevision, message: "Resolve or finish the existing delivery before queueing edited content") }
+                guard previous.sourceRevision < Int(Int32.max) else { throw PrismError.invalidPayload("Revision limit reached") }
+                result = try store.enqueueOutboxItem(makeItem(bundle: bundle, destinationVault: destinationVault, sourceRevision: previous.sourceRevision + 1, baseServerRevision: base))
+            } else {
+                result = try store.enqueueOutboxItem(makeItem(bundle: bundle, destinationVault: destinationVault, sourceRevision: 1, baseServerRevision: nil))
+            }
+        }
+        guard let result else { throw PrismError.invalidPayload("Queue operation returned no result") }
+        return result
+    }
+
+    private func makeItem(bundle: MeetingExportBundle, destinationVault: String, sourceRevision: Int, baseServerRevision: Int?) throws -> OutboxItem {
         let isoFmt = ISO8601DateFormatter()
         let startedAtStr = isoFmt.string(from: bundle.meeting.startedAt)
         let endedAtStr: String?
@@ -41,22 +71,22 @@ public final class OutboxManager: Sendable {
                 sourcePersonId: p.id,
                 displayName: p.displayName,
                 emails: p.emails,
-                attendance: "confirmed"
+                attendance: bundle.clusters.contains { $0.personId == p.id && $0.assignment == "user" } ? "confirmed" : "invited"
             )
         }
         
+        let peopleIds = Set(peopleCtx.map(\.sourcePersonId))
         let utterancesCtx = bundle.utterances.map { u in
-            PrismUtteranceContext(
-                id: "\(u.id)",
-                startMs: Int(u.start * 1000.0),
-                endMs: Int(u.end * 1000.0),
-                text: u.text,
-                speakerPersonId: u.speakerName.isEmpty ? nil : u.speakerName,
-                assignment: "user"
+            let cluster = bundle.clusters.first { $0.id == u.clusterId && $0.meetingId == u.meetingId }
+            let personId = cluster?.personId.flatMap { peopleIds.contains($0) ? $0 : nil }
+            let assignment = personId == nil ? "unassigned" : (cluster?.assignment == "user" ? "user" : "model")
+            return PrismUtteranceContext(
+                id: "\(u.id)", startMs: Int(u.start * 1000.0), endMs: Int(u.end * 1000.0),
+                text: u.text, speakerPersonId: personId, assignment: assignment
             )
         }
-        
-        let notesText = (bundle.meeting.userNotes?.isEmpty == false) ? (bundle.meeting.userNotes ?? "") : (bundle.summary?.markdown ?? "")
+
+        let notesText = bundle.meeting.userNotes ?? ""
         let summaryText = bundle.summary?.markdown ?? ""
         let contentHash = PrismMeetingPayload.computeContentHash(
             title: bundle.meeting.title,
@@ -70,7 +100,9 @@ public final class OutboxManager: Sendable {
         let summaryCtx = PrismSummaryContext(
             markdown: summaryText,
             status: bundle.summary != nil ? "completed" : "not_generated",
-            evidence: bundle.summary?.decisions ?? []
+            // Typed citation references are not persisted in MeetingSummary yet.
+            // Keep evidence empty rather than inventing references from decision text.
+            evidence: []
         )
         
         let payload = PrismMeetingPayload(
@@ -96,22 +128,18 @@ public final class OutboxManager: Sendable {
             throw PrismError.invalidPayload("Cannot serialize payload to UTF8 string")
         }
         
-        // Deterministic idempotency key: hash(meetingId:revision:contentHash)
-        let rawIdemKey = "\(bundle.meeting.id):\(sourceRevision):\(contentHash)"
-        let digest = SHA256.hash(data: Data(rawIdemKey.utf8))
+        // Scope delivery identity to both destination and the complete payload.
+        let rawIdemKey = (grantFingerprint.map { Data($0.utf8) + Data([0]) } ?? Data()) + (destinationOrigin.map { Data($0.utf8) + Data([0]) } ?? Data()) + Data(destinationVault.utf8) + Data([0]) + payloadData
+        let digest = SHA256.hash(data: rawIdemKey)
         let idempotencyKey = digest.compactMap { String(format: "%02x", $0) }.joined()
         
-        // Deduplication check
-        let existingItems = store.listOutboxItems(meetingId: bundle.meeting.id, status: nil)
-        if let existing = existingItems.first(where: { $0.idempotencyKey == idempotencyKey }) {
-            // Already queued or synced with identical contents
-            return existing
-        }
-        
         let item = OutboxItem(
-            id: UUID().uuidString.prefix(8).lowercased(),
+            id: UUID().uuidString.lowercased(),
             meetingId: bundle.meeting.id,
             destinationVault: destinationVault,
+            destinationOrigin: destinationOrigin,
+            grantFingerprint: grantFingerprint,
+            baseServerRevision: baseServerRevision,
             sourceRevision: sourceRevision,
             idempotencyKey: idempotencyKey,
             status: .pending,
@@ -123,158 +151,100 @@ public final class OutboxManager: Sendable {
             payloadJson: payloadJson
         )
         
-        try store.saveOutboxItem(item)
         return item
     }
     
     // MARK: - Process Pending Outbox Items
     
     @discardableResult
-    public func processPending() async -> [OutboxItem] {
-        let pending = store.listOutboxItems(meetingId: nil, status: .pending)
-        let retryable = store.listOutboxItems(meetingId: nil, status: .failedRetryable)
-        let allEligible = pending + retryable
-        
-        var processed: [OutboxItem] = []
+    public func processPending() async throws -> [OutboxItem] {
         let now = Date()
-        
-        for var item in allEligible {
-            // Check exponential backoff
-            if item.status == .failedRetryable, let last = item.lastAttemptAt {
-                let backoffSeconds = min(60.0, baseBackoff * pow(2.0, Double(min(item.retryCount, 6))))
-                if now.timeIntervalSince(last) < backoffSeconds {
-                    continue // Skip until backoff window passes
-                }
+        let candidates = store.listOutboxItems(meetingId: nil, status: nil).filter { item in
+            guard item.destinationOrigin == destinationOrigin && item.grantFingerprint == grantFingerprint else { return false }
+            switch item.status {
+            case .pending: return true
+            case .sending:
+                return item.lastAttemptAt == nil || now.timeIntervalSince(item.lastAttemptAt!) > 120
+            case .failedRetryable, .awaitingReceipt:
+                guard item.retryCount < maxRetries else { return false }
+                let backoff = min(60, baseBackoff * pow(2, Double(min(item.retryCount, 6))))
+                return item.lastAttemptAt == nil || now.timeIntervalSince(item.lastAttemptAt!) >= backoff
+            default: return false
             }
-            
-            // Mark sending
-            item.status = .sending
-            try? store.saveOutboxItem(item)
-            
-            guard let payloadData = item.payloadJson.data(using: .utf8),
-                  let payload = try? JSONDecoder().decode(PrismMeetingPayload.self, from: payloadData) else {
-                item.status = .conflict
-                item.errorMessage = "Failed to parse stored payload JSON"
-                item.lastAttemptAt = Date()
-                try? store.saveOutboxItem(item)
-                processed.append(item)
-                continue
-            }
-            
-            let baseRev = item.sourceRevision > 1 ? item.sourceRevision - 1 : nil
-            
-            do {
-                let receipt = try await client.uploadMeeting(
-                    payload: payload,
-                    destinationVault: item.destinationVault,
-                    idempotencyKey: item.idempotencyKey,
-                    baseRevision: baseRev
-                )
-                item.status = .synced
-                item.receipt = receipt
-                item.errorMessage = nil
-                item.lastAttemptAt = Date()
-                try? store.saveOutboxItem(item)
-            } catch let err as PrismError {
-                item.lastAttemptAt = Date()
-                switch err {
-                case .needsSignIn:
-                    item.status = .needsSignIn
-                    item.errorMessage = err.localizedDescription
-                case .forbidden:
-                    item.status = .forbidden
-                    item.errorMessage = err.localizedDescription
-                case .conflict:
-                    item.status = .conflict
-                    item.errorMessage = err.localizedDescription
-                case .failedRetryable:
-                    item.retryCount += 1
-                    item.status = .failedRetryable
-                    item.errorMessage = err.localizedDescription
-                case .invalidPayload, .unhandledResponse:
-                    item.status = .conflict
-                    item.errorMessage = err.localizedDescription
-                }
-                try? store.saveOutboxItem(item)
-            } catch {
-                item.lastAttemptAt = Date()
-                item.retryCount += 1
-                item.status = .failedRetryable
-                item.errorMessage = error.localizedDescription
-                try? store.saveOutboxItem(item)
-            }
-            
-            processed.append(item)
         }
-        
+        var processed: [OutboxItem] = []
+        for item in candidates {
+            if let result = try await sendClaimed(item) { processed.append(result) }
+        }
         return processed
     }
-    
-    // MARK: - Manual Retry & Cancellation
-    
-    public func retryItem(id: String) async throws -> OutboxItem {
-        guard var item = store.getOutboxItem(id: id) else {
-            throw PrismError.invalidPayload("Outbox item not found: \(id)")
+
+    // The SQL claim, rather than an in-memory lock, coordinates separate workers.
+    private func sendClaimed(_ original: OutboxItem) async throws -> OutboxItem? {
+        let claimedAt = Date()
+        guard try store.claimOutboxItem(id: original.id, at: claimedAt,
+                staleBefore: claimedAt.addingTimeInterval(-120)) else { return nil }
+        guard var item = store.getOutboxItem(id: original.id) else {
+            throw PrismError.invalidPayload("Claimed outbox row disappeared")
         }
-        
-        item.status = .pending
-        item.retryCount = 0
-        item.errorMessage = nil
-        try store.saveOutboxItem(item)
-        
-        guard let payloadData = item.payloadJson.data(using: .utf8),
-              let payload = try? JSONDecoder().decode(PrismMeetingPayload.self, from: payloadData) else {
-            throw PrismError.invalidPayload("Failed to parse stored payload JSON")
-        }
-        
-        let baseRev = item.sourceRevision > 1 ? item.sourceRevision - 1 : nil
+        guard item.status == .sending, item.lastAttemptAt?.timeIntervalSince1970 == claimedAt.timeIntervalSince1970 else { return item }
         do {
-            let receipt = try await client.uploadMeeting(
-                payload: payload,
-                destinationVault: item.destinationVault,
-                idempotencyKey: item.idempotencyKey,
-                baseRevision: baseRev
-            )
+            let payload = try JSONDecoder().decode(PrismMeetingPayload.self, from: Data(item.payloadJson.utf8))
+            let receipt = try await client.uploadMeeting(payload: payload,
+                destinationVault: item.destinationVault, idempotencyKey: item.idempotencyKey,
+                baseRevision: item.baseServerRevision)
             item.status = .synced
             item.receipt = receipt
             item.errorMessage = nil
-            item.lastAttemptAt = Date()
-            try store.saveOutboxItem(item)
-            return item
-        } catch let err as PrismError {
-            item.lastAttemptAt = Date()
-            switch err {
-            case .needsSignIn:
-                item.status = .needsSignIn
-            case .forbidden:
-                item.status = .forbidden
-            case .conflict:
-                item.status = .conflict
+        } catch let error as PrismError {
+            item.errorMessage = error.localizedDescription
+            switch error {
+            case .acceptedPending:
+                item.status = .awaitingReceipt
+                item.retryCount += 1
+            case .needsSignIn: item.status = .needsSignIn
+            case .forbidden: item.status = .forbidden
+            case .conflict, .invalidPayload, .unhandledResponse: item.status = .conflict
             case .failedRetryable:
                 item.retryCount += 1
                 item.status = .failedRetryable
-            case .invalidPayload, .unhandledResponse:
-                item.status = .conflict
             }
-            item.errorMessage = err.localizedDescription
-            try store.saveOutboxItem(item)
-            throw err
+        } catch is DecodingError {
+            item.status = .conflict
+            item.errorMessage = "Failed to parse stored payload JSON"
         } catch {
-            item.lastAttemptAt = Date()
             item.retryCount += 1
             item.status = .failedRetryable
             item.errorMessage = error.localizedDescription
-            try store.saveOutboxItem(item)
-            throw error
         }
+        item.lastAttemptAt = Date()
+        if try store.finishOutboxClaim(item, claimedAt: claimedAt) { return item }
+        // Cancellation or another worker's newer claim takes precedence.
+        return store.getOutboxItem(id: item.id)
     }
-    
+
+    public func retryItem(id: String) async throws -> OutboxItem {
+        guard let original = store.getOutboxItem(id: id) else {
+            throw PrismError.invalidPayload("Outbox item not found: \(id)")
+        }
+        guard original.destinationOrigin == destinationOrigin && original.grantFingerprint == grantFingerprint else { throw PrismError.forbidden("This export belongs to a different Prism origin") }
+        guard original.status != .revoked else {
+            throw PrismError.invalidPayload("Cancelled exports must be enqueued explicitly")
+        }
+        if original.status == .synced { return original }
+        try store.resetOutboxForRetry(id: id)
+        guard let item = store.getOutboxItem(id: id), let result = try await sendClaimed(item) else {
+            throw PrismError.invalidPayload("Outbox item is already being sent")
+        }
+        return result
+    }
+
     public func cancelItem(id: String) throws {
         guard var item = store.getOutboxItem(id: id) else {
             throw PrismError.invalidPayload("Outbox item not found: \(id)")
         }
         item.status = .revoked
-        item.errorMessage = "Cancelled by user"
+        item.errorMessage = "Cancelled by user; an already accepted remote upload may still complete"
         try store.saveOutboxItem(item)
     }
 }

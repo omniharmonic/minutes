@@ -154,11 +154,17 @@ public final class SpeakerMatcher: Sendable {
     public let autoThreshold: Double
     public let suggestThreshold: Double
     public let attendeeBonus: Double
+    public let requiredModel: String?
+    public let allowAutomaticAssignment: Bool
+    public let minimumMargin: Double
     
-    public init(autoThreshold: Double = 0.68, suggestThreshold: Double = 0.52, attendeeBonus: Double = 0.08) {
+    public init(autoThreshold: Double = 0.68, suggestThreshold: Double = 0.52, attendeeBonus: Double = 0.08, requiredModel: String? = SpeakerEmbeddingModel.trainedID, allowAutomaticAssignment: Bool = false, minimumMargin: Double = 0.06) {
         self.autoThreshold = autoThreshold
         self.suggestThreshold = suggestThreshold
         self.attendeeBonus = attendeeBonus
+        self.requiredModel = requiredModel
+        self.allowAutomaticAssignment = allowAutomaticAssignment
+        self.minimumMargin = minimumMargin
     }
     
     /// Matches speaker clusters to candidate persons using voiceprints and calendar priors.
@@ -170,10 +176,17 @@ public final class SpeakerMatcher: Sendable {
     ) -> [MatchResult] {
         // Map personId to voiceprint vectors
         var vpMap: [String: [[Float]]] = [:]
-        for vp in voiceprints {
+        for vp in voiceprints where (requiredModel == nil || vp.model == requiredModel) && vp.dim == vp.vector.count && vp.vector.allSatisfy({ $0.isFinite }) {
             vpMap[vp.personId, default: []].append(vp.vector)
         }
         
+        // Stored trained profiles are created by explicit Remember this voice consent.
+        // Automatic prefill requires a substantial learned sample, not merely a vector.
+        let learnedProfiles = voiceprints.filter {
+            $0.model == SpeakerEmbeddingModel.trainedID && $0.dim == 256 && $0.vector.count == 256 &&
+            $0.vector.allSatisfy(\.isFinite) && VectorMath.l2Norm($0.vector) > 1e-12 &&
+            $0.speechSeconds.isFinite && $0.speechSeconds >= 20
+        }
         let personNameMap = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0.displayName) })
         
         // Compute pairwise similarity scores: (clusterId, personId) -> score
@@ -182,12 +195,14 @@ public final class SpeakerMatcher: Sendable {
             let personId: String
             let score: Double
             let isAttendee: Bool
+            let automaticEligible: Bool
         }
         
         var allScores: [CandidateScore] = []
         
         for c in clusters {
-            guard !c.centroid.isEmpty else { continue }
+            guard !c.centroid.isEmpty, c.centroid.allSatisfy({ $0.isFinite }) else { continue }
+            if let model=requiredModel {guard c.embeddingModel==model, c.centroid.count==256, c.speechSeconds>=3 else {continue}}
             
             for p in people {
                 guard let vps = vpMap[p.id], !vps.isEmpty else { continue }
@@ -205,17 +220,49 @@ public final class SpeakerMatcher: Sendable {
                 // Acoustic floor: calendar prior only applies if voice has plausible acoustic similarity (>= 0.40)
                 // and effective score is strictly clamped to [0.0, 1.0]
                 let boosted = (isAttendee && maxSim >= 0.40) ? (maxSim + attendeeBonus) : maxSim
-                let effectiveScore = min(1.0, max(0.0, boosted))
+                // Calendar attendance is context, never acoustic proof of identity.
+                // Keep legacy, explicitly model-free scoring for fixture/experimental callers.
+                let learnedSimilarity = learnedProfiles.filter { $0.personId == p.id }
+                    .map { VectorMath.cosineSimilarity(c.centroid, $0.vector) }.max() ?? 0
+                let automaticEligible = requiredModel == nil ||
+                    (requiredModel == SpeakerEmbeddingModel.trainedID && c.speechSeconds.isFinite &&
+                     c.speechSeconds >= 5 && learnedSimilarity >= max(0.88, autoThreshold))
+                // An automatic candidate's score, margin and reported similarity
+                // must come from the same eligible learned evidence. A short
+                // exact-match profile must not inflate a weaker long profile.
+                // Ineligible competitors keep their acoustic score, so even a
+                // short competing voice can still make us abstain conservatively.
+                let scoreEvidence = allowAutomaticAssignment && requiredModel == SpeakerEmbeddingModel.trainedID && automaticEligible
+                    ? learnedSimilarity : (requiredModel == nil ? boosted : maxSim)
+                let effectiveScore = min(1.0, max(0.0, scoreEvidence))
                 
                 allScores.append(CandidateScore(
                     clusterId: c.id,
                     personId: p.id,
                     score: effectiveScore,
-                    isAttendee: isAttendee
+                    isAttendee: isAttendee,
+                    automaticEligible: automaticEligible
                 ))
             }
         }
         
+        // Abstain when another person's compatible profile is too close. Scores are similarity, not calibrated probability.
+        let margin = allowAutomaticAssignment && requiredModel != nil ? max(0.12, minimumMargin) : minimumMargin
+        if margin > 0 {
+            let grouped=Dictionary(grouping:allScores,by:{$0.clusterId})
+            let ambiguous=Set(grouped.compactMap { id, scores -> String? in
+                let ranked=scores.sorted {$0.score>$1.score}
+                return ranked.count>1 && ranked[0].score-ranked[1].score<margin ? id : nil
+            })
+            allScores.removeAll {ambiguous.contains($0.clusterId)}
+        }
+        if requiredModel != nil {
+            // Losing a one-to-one competition must abstain, not inherit a weaker second choice.
+            let best = Dictionary(grouping: allScores, by: \.clusterId).compactMapValues { scores in
+                scores.max { $0.score < $1.score }
+            }
+            allScores = Array(best.values)
+        }
         // Greedy 1-to-1 matching (ordered by descending score)
         let sorted = allScores.sorted { $0.score > $1.score }
         var matchedClusters = Set<String>()
@@ -231,7 +278,7 @@ public final class SpeakerMatcher: Sendable {
             let suggThresh = suggestThreshold
             
             let assignment: String
-            if item.score >= thresh {
+            if allowAutomaticAssignment && item.automaticEligible && item.score >= thresh {
                 assignment = "auto"
             } else if item.score >= suggThresh {
                 assignment = "suggested"

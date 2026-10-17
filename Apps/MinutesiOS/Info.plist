@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Minutes</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Google Calendar</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Minutes authentication</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>minutes</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>GoogleDesktopClientID</key>
+	<string>618880165655-s4ct030bbuqbti3cqlkt6jsdtqf77lve.apps.googleusercontent.com</string>
+	<key>GoogleIOSClientID</key>
+	<string>618880165655-h7cgl66bg5i3539cv8npvthhp9i53uhk.apps.googleusercontent.com</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Connect meetings and invitees from the calendars you configure on this device.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Connect meetings from calendars configured on this device.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record meeting audio on this device when you tap Record.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Transcribe saved meeting audio using on-device speech recognition.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

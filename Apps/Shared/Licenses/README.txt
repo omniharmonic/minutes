@@ -1,0 +1,1 @@
+Minutes uses FluidAudio 0.17.7, pinned from https://github.com/FluidInference/FluidAudio . Its Apache 2.0 license and supplied third-party notices are included here. Speaker model weights are not bundled in this app; model setup downloads them explicitly. Refer to the pinned SDK/model upstream notices for their attribution and license terms.

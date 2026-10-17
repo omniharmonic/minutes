@@ -11,7 +11,7 @@ struct Gate2SpeakerIDStressTests {
         let autoThresh = 0.68
         let suggThresh = 0.52
         let bonus = 0.08
-        let matcher = SpeakerMatcher(autoThreshold: autoThresh, suggestThreshold: suggThresh, attendeeBonus: bonus)
+        let matcher = SpeakerMatcher(autoThreshold: autoThresh, suggestThreshold: suggThresh, attendeeBonus: bonus, requiredModel: nil, allowAutomaticAssignment: true, minimumMargin: 0)
         
         let pAlice = Person(id: "p_alice", displayName: "Alice Attendee")
         let pBob = Person(id: "p_bob", displayName: "Bob NonAttendee")
@@ -166,7 +166,7 @@ struct Gate2SpeakerIDStressTests {
         // Bob score = 0.54 (non-attendee)
         // Because 0.58 > 0.54, Alice wins the greedy match for Cluster 1!
         // Both 0.58 and 0.54 are < 0.68 (autoThresh) and >= 0.52 (suggThresh), so assignment is "suggested".
-        let matcher = SpeakerMatcher(autoThreshold: 0.68, suggestThreshold: 0.52, attendeeBonus: 0.08)
+        let matcher = SpeakerMatcher(autoThreshold: 0.68, suggestThreshold: 0.52, attendeeBonus: 0.08, requiredModel: nil, allowAutomaticAssignment: true, minimumMargin: 0)
         let matches = matcher.match(
             clusters: [cluster1],
             people: [pAlice, pBob],

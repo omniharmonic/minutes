@@ -2,34 +2,116 @@
 import SwiftUI
 import AppKit
 
+@MainActor
+public final class AppStartup: ObservableObject {
+    @Published public private(set) var state: AppState?
+    @Published public private(set) var errorMessage: String?
+    private let databasePath: String?
+    private let libraryDirectory: URL?
+
+    public init(databasePath: String? = nil, libraryDirectory: URL? = nil) {
+        self.databasePath = databasePath
+        self.libraryDirectory = libraryDirectory ?? ProcessInfo.processInfo.environment["MINUTES_LIBRARY_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        retry()
+    }
+
+    public func retry() {
+        do {
+            if let libraryDirectory {
+                try FileManager.default.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
+                guard let preferences = UserDefaults(suiteName: "app.minutes.library.\(libraryDirectory.path)") else { throw CocoaError(.fileWriteUnknown) }
+                if preferences.string(forKey: "markdownDirectory") == nil {
+                    preferences.set(libraryDirectory.appendingPathComponent("exports", isDirectory: true).path, forKey: "markdownDirectory")
+                }
+                state = try AppState(databasePath: databasePath ?? libraryDirectory.appendingPathComponent("minutes.sqlite").path,
+                    audioDirectory: libraryDirectory.appendingPathComponent("audio", isDirectory: true), preferences: preferences)
+            } else {
+                state = try AppState(databasePath: databasePath)
+            }
+            errorMessage = nil
+        } catch {
+            state = nil
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+@MainActor
+final class MinutesApplicationDelegate: NSObject, NSApplicationDelegate {
+    weak var state: AppState?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let state, state.isRecording || state.isStartingRecording || state.isFinalizingRecording || state.isProcessing || state.isSummarizing else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Finish your meeting before quitting"
+        alert.informativeText = "Stop the recording and let processing finish before quitting Minutes. Your current work is still active."
+        alert.addButton(withTitle: "Keep Minutes Open")
+        alert.runModal()
+        return .terminateCancel
+    }
+}
+
 @available(macOS 15.0, *)
 @main
 public struct MinutesApp: App {
-    @StateObject private var appState = AppState()
+    @StateObject private var startup = AppStartup()
+    @NSApplicationDelegateAdaptor(MinutesApplicationDelegate.self) private var applicationDelegate
     
     public init() {}
     
     public var body: some Scene {
         // Main Desktop Window
         WindowGroup("Minutes", id: "main") {
-            MainWindowView(appState: appState)
-                .preferredColorScheme(.dark)
+            Group {
+                if let appState = startup.state {
+                    MainWindowView(appState: appState)
+                        .onAppear { applicationDelegate.state = appState }
+                        .task { await appState.restoreCalendarConnections() }
+                        .task { await appState.restorePrismConnection() }
+                } else {
+                    VStack(spacing: 16) {
+                        Text("Minutes could not open your library").font(.headline)
+                        Text(startup.errorMessage ?? "Storage unavailable").textSelection(.enabled)
+                        Button("Retry opening library") { startup.retry() }
+                    }.padding(32)
+                }
+            }
                 .onAppear {
                     NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
                 }
         }
-        .windowStyle(.titleBar)
+        .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified)
-        .defaultSize(width: 1120, height: 740)
+        .defaultSize(width: 1292, height: 864)
+        .commands {
+            CommandGroup(after: .textEditing) {
+                Button("Search Meetings") { NotificationCenter.default.post(name: Notification.Name("MinutesFocusLibrarySearch"), object: nil) }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+            }
+            CommandGroup(after: .newItem) {
+                Button("New Recording") { startup.state?.selectedSection = .liveIngestion }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(startup.state == nil)
+                Button("Import Audio or Transcript…") { NotificationCenter.default.post(name: Notification.Name("MinutesImportAudio"), object: nil) }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                    .disabled(startup.state == nil)
+            }
+        }
         
+        Settings {
+            if let state = startup.state { SettingsView(appState: state).frame(width: 640, height: 510) }
+        }
+
         // Menu Bar Extra Status Item
-        MenuBarExtra("Minutes", systemImage: appState.isRecording ? "record.circle.fill" : "waveform.circle") {
+        MenuBarExtra("Minutes", systemImage: startup.state?.isRecording == true ? "record.circle.fill" : "waveform.circle") {
+            if let appState = startup.state {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("Minutes Meeting Intelligence")
+                    Text("Minutes")
                         .font(.headline)
                     Spacer()
-                    Text("v1.0")
+                    Text("v1.0 (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "3"))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -52,7 +134,7 @@ public struct MinutesApp: App {
                     }
                 } else {
                     Button("Start Quick Meeting") {
-                        appState.startQuickMeeting()
+                        Task { if await appState.prepareRecording() { appState.startQuickMeeting() } }
                     }
                 }
                 
@@ -65,7 +147,7 @@ public struct MinutesApp: App {
                     }
                 }
                 
-                Button("Export Last Meeting to Parachute") {
+                Button("Send meeting to Parachute") {
                     Task {
                         _ = await appState.exportCurrentMeeting(target: "parachute")
                     }
@@ -85,6 +167,11 @@ public struct MinutesApp: App {
                 .keyboardShortcut("q", modifiers: .command)
             }
             .padding(4)
+            } else {
+                Text("Library unavailable")
+                Button("Retry opening library") { startup.retry() }
+                Button("Quit Minutes") { NSApplication.shared.terminate(nil) }
+            }
         }
     }
 }

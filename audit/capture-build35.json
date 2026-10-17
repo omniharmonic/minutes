@@ -1,0 +1,63 @@
+{
+  "build": 35,
+  "nativeSourcePopoverVerified": true,
+  "systemTrack48kNonSilent": true,
+  "historicalMuffledClipRecovered": false,
+  "recentAcceptance": [
+    {
+      "meetingID": "e4954844-49be-4be9-8993-16d9c2fe6e90",
+      "status": "needs_review",
+      "utterances": 2,
+      "summaries": 1,
+      "capture": [
+        {
+          "committedSeconds": 0,
+          "hardwareSampleRate": 44100,
+          "tapSampleRate": 44100,
+          "event": "nativeGraphPrepared",
+          "hasFailure": false
+        },
+        {
+          "committedSeconds": 14.46225,
+          "committedBufferCount": 145,
+          "event": "stopped",
+          "hasFailure": false
+        }
+      ]
+    },
+    {
+      "meetingID": "ab250467-6000-45bc-9b27-923b532132a3",
+      "status": "needs_review",
+      "utterances": 2,
+      "summaries": 1,
+      "capture": [
+        {
+          "hasFailure": false,
+          "hardwareSampleRate": 44100,
+          "committedSeconds": 0,
+          "event": "nativeGraphPrepared",
+          "tapSampleRate": 44100
+        },
+        {
+          "hasFailure": false,
+          "committedBufferCount": 125,
+          "committedSeconds": 12.4625,
+          "event": "stopped"
+        }
+      ]
+    },
+    {
+      "meetingID": "3a972e30-cade-4c8f-891a-33470bd3e55d",
+      "status": "needs_review",
+      "utterances": 1,
+      "summaries": 1
+    }
+  ],
+  "systemCaptureSignalAndASR": {
+    "systemTrackGeneratedSpeechCorrelation": 0.9846591411565057,
+    "expectedWords": 45,
+    "recognizedReferenceWords": 22,
+    "referenceWordRecall": 0.4888888888888889,
+    "recognitionAccuracyFullyVerified": false
+  }
+}

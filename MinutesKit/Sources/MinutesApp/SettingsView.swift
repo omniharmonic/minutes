@@ -1,138 +1,270 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import UniformTypeIdentifiers
 import MinutesCore
 import MinutesUI
+import MinutesSummarize
 
 @available(macOS 15.0, iOS 18.0, *)
 public struct SettingsView: View {
     @ObservedObject public var appState: AppState
-    @State private var savedToast: Bool = false
-    
-    public init(appState: AppState) {
-        self.appState = appState
-    }
-    
+    @ObservedObject private var permissions = PermissionManager.shared
+    @Environment(\.openURL) private var openURL
+    @State private var choosingMarkdownFolder = false
+    @State private var folderError: String?
+
+    public init(appState: AppState) { self.appState = appState }
+
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                // Header
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "gearshape.fill")
-                            .font(.title2)
-                            .foregroundStyle(MinutesTheme.primary)
-                        Text("Application Settings")
-                            .font(.title2.bold())
-                            .foregroundStyle(MinutesTheme.text)
-                    }
-                    Text("Configure local storage, knowledge vault connections, and diarization parameters.")
-                        .font(.subheadline)
-                        .foregroundStyle(MinutesTheme.muted)
+        TabView {
+            general.tabItem { Label("General", systemImage: "gearshape") }
+            calendar.tabItem { Label("Calendar", systemImage: "calendar") }
+            connections.tabItem { Label("Connections", systemImage: "link") }
+            privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }
+        }
+        .controlSize(.regular)
+        .onAppear {
+            appState.refreshSpeechReadiness()
+            permissions.checkAllPermissions()
+        }
+        .fileImporter(isPresented: $choosingMarkdownFolder, allowedContentTypes: [.folder]) { result in
+            switch result {
+            case .success(let url):
+                appState.markdownDirectory = url.path
+                folderError = nil
+            case .failure(let error): folderError = error.localizedDescription
+            }
+        }
+    }
+
+    private var general: some View {
+        Form {
+            #if os(macOS)
+            Section("Recording") {
+                Picker("Audio source", selection: $appState.captureMode) {
+                    ForEach(AppState.CaptureMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
                 }
-                
-                // Knowledge Vault Exports
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Image(systemName: "externaldrive.fill")
-                            .foregroundStyle(MinutesTheme.primary)
-                        Text("KNOWLEDGE GRAPH EXPORT TARGETS")
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.primary)
-                        Spacer()
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Parachute Vault Host Endpoint:")
-                                .font(.caption.bold())
-                            TextField("Host URL", text: $appState.parachuteHost)
-                                .textFieldStyle(.roundedBorder)
-                            Text("Default is http://localhost:1940 (or 127.0.0.1:1940).")
-                                .font(.caption)
-                                .foregroundStyle(MinutesTheme.muted)
-                        }
-                        
-                        Divider()
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Obsidian Markdown Export Directory:")
-                                .font(.caption.bold())
-                            TextField("Path", text: $appState.markdownDirectory)
-                                .textFieldStyle(.roundedBorder)
-                            Text("Vault directory where Obsidian-compatible meeting markdown files will be written.")
-                                .font(.caption)
-                                .foregroundStyle(MinutesTheme.muted)
-                        }
-                    }
+                .disabled(appState.isRecording || appState.isStartingRecording)
+            }
+            #endif
+            Section("Notes") {
+                Toggle("Summarize with Apple Intelligence", isOn: $appState.summaryUsesAppleIntelligence)
+                Picker("Default format", selection: $appState.summaryTemplate) {
+                    ForEach(SummaryTemplate.allCases, id: \.self) { template in Text(template.title).tag(template) }
                 }
-                .padding(20)
-                .minutesCard()
-                
-                // Diarization Engine Defaults
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Image(systemName: "slider.horizontal.3")
-                            .foregroundStyle(MinutesTheme.purple)
-                        Text("DIARIZATION SENSITIVITY DEFAULTS")
-                            .font(.caption.bold())
-                            .foregroundStyle(MinutesTheme.purple)
-                        Spacer()
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Default Pause Threshold:")
-                                    .font(.subheadline.bold())
-                                Spacer()
-                                Text(String(format: "%.1f seconds", appState.diarizationConfig.pauseThreshold))
-                                    .font(.subheadline.monospacedDigit())
-                                    .foregroundStyle(MinutesTheme.primary)
-                            }
-                            Slider(value: $appState.diarizationConfig.pauseThreshold, in: 0.5...3.5, step: 0.1)
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Default Aggressiveness:")
-                                    .font(.subheadline.bold())
-                                Spacer()
-                                Text(String(format: "%.2f", appState.diarizationConfig.aggressiveness))
-                                    .font(.subheadline.monospacedDigit())
-                                    .foregroundStyle(MinutesTheme.purple)
-                            }
-                            Slider(value: $appState.diarizationConfig.aggressiveness, in: 0.0...1.0, step: 0.05)
-                        }
-                    }
-                }
-                .padding(20)
-                .minutesCard()
-                
-                // Action Buttons
+                .disabled(!appState.summaryUsesAppleIntelligence)
+                Text(appState.summaryUsesAppleIntelligence
+                     ? FoundationModelsProvider.availability().message
+                     : "Notes use excerpts from the transcript.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Text(appState.speechModelStatus).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 HStack {
-                    Button("Save Configuration") {
-                        savedToast = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                            savedToast = false
+                    Button(appState.isPreparingRecording ? "Checking…" : "Check Recording Setup") {
+                        Task { _ = await appState.prepareRecording() }
+                    }.disabled(!appState.canStartRecording)
+                    Button(appState.isSettingUpSpeechModels ? "Installing…" : "Install Speaker Models") {
+                        Task { await appState.setupSpeechModels() }
+                    }.disabled(appState.isSettingUpSpeechModels)
+                    if appState.isSettingUpSpeechModels { ProgressView().controlSize(.small) }
+                }
+                if appState.statusMessage.hasPrefix("Recording setup:") || appState.statusMessage == "Ready to record on this device." {
+                    Text(appState.statusMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                DisclosureGroup("Fine-tune speaker detection") {
+                    LabeledContent("Pause threshold") {
+                        Slider(value: $appState.diarizationConfig.pauseThreshold, in: 0.5...3.5, step: 0.1)
+                            .frame(maxWidth: 180)
+                        Text(String(format: "%.1f s", appState.diarizationConfig.pauseThreshold))
+                            .monospacedDigit().frame(width: 46)
+                    }
+                    LabeledContent("Sensitivity") {
+                        Slider(value: $appState.diarizationConfig.aggressiveness, in: 0...1, step: 0.05)
+                            .frame(maxWidth: 230)
+                    }
+                }
+            } header: { Text("Speech & speakers") } footer: {
+                Text("Transcription runs on this device. Speaker models are installed only when you choose Install.")
+            }
+        }.formStyle(.grouped)
+            .contentMargins(.vertical, 8, for: .scrollContent)
+    }
+
+    private var calendar: some View {
+        Form {
+            Section {
+                LabeledContent("Apple Calendar") {
+                    connectionStatus(appState.calendarConnected && appState.calendarSource == .apple)
+                    Button(appState.calendarConnected && appState.calendarSource == .apple ? "Refresh" : "Connect…") {
+                        Task { await appState.connectCalendar() }
+                    }
+                }
+                Text("Use the accounts already added to Apple Calendar.").font(.caption).foregroundStyle(.secondary)
+                if appState.calendarSource == .apple && appState.calendarMessage != "Connect accounts configured in Apple Calendar, including Google accounts." {
+                    Text(appState.calendarMessage).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            Section {
+                LabeledContent("Google Calendar") {
+                    connectionStatus(appState.googleConnected && appState.calendarSource == .google)
+                    if appState.googleConnecting { ProgressView().controlSize(.small) }
+                    if appState.googleConnected {
+                        Button("Disconnect") { Task { await appState.disconnectGoogleCalendar() } }
+                    } else {
+                        Button(appState.googleConnecting ? "Connecting…" : "Connect…") {
+                            Task { await appState.connectGoogleCalendar() }
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(MinutesTheme.primary)
-                    
-                    if savedToast {
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(MinutesTheme.emerald)
-                            Text("Saved to preferences")
-                                .font(.caption.bold())
-                                .foregroundStyle(MinutesTheme.emerald)
-                        }
+                }.disabled(appState.googleConnecting)
+                if appState.googleMessage != "Connect Google directly, or use accounts in Apple Calendar." {
+                    Text(appState.googleMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                if appState.googleRefreshing {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Updating meeting events…").font(.callout).foregroundStyle(.secondary)
+                    }.accessibilityElement(children: .combine)
+                }
+                Button(appState.googleConnected ? "Refresh Calendar" : "Reconnect Saved Account") {
+                    Task { await appState.resumeGoogleCalendar() }
+                }.disabled(appState.googleConnecting || appState.googleRefreshing)
+                DisclosureGroup("Advanced") {
+                    TextField("Mac client ID", text: $appState.googleDesktopClientID)
+                    TextField("iOS client ID", text: $appState.googleIOSClientID)
+                    TextField("Calendar IDs", text: $appState.googleCalendarIDs)
+                    Text("Public OAuth client IDs are required for direct sign-in. Calendar IDs default to primary. Credentials stay in Keychain.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Section("Meeting Reminders") {
+                LabeledContent("Notifications") {
+                    Text(appState.calendarNotificationsEnabled ? "Enabled" : "Off").foregroundStyle(.secondary)
+                    Button("Enable…") { Task { await appState.enableCalendarNotifications() } }
+                        .disabled(appState.calendarNotificationsEnabled)
+                }
+            }
+        }.formStyle(.grouped)
+            .contentMargins(.vertical, 8, for: .scrollContent)
+    }
+
+    private var connections: some View {
+        Form {
+            Section("Prism") {
+                LabeledContent("Connection") { connectionStatus(appState.prismVerified) }
+                TextField("Server", text: $appState.prismOrigin).disabled(appState.prismBusy)
+                if !appState.prismVaults.isEmpty {
+                    Picker("Vault", selection: $appState.prismVaultID) {
+                        ForEach(appState.prismVaults) { vault in Text(vault.name ?? vault.id).tag(vault.id) }
+                    }.disabled(appState.prismBusy)
+                }
+                HStack {
+                    Button("Connect…") { Task { await appState.connectPrism() } }
+                    Button("Verify Connection") { Task { await appState.verifyPrism() } }
+                    if appState.prismVerified || !appState.prismVaults.isEmpty {
+                        Button("Disconnect") { Task { await appState.disconnectPrism() } }
+                    }
+                    if appState.prismBusy { ProgressView().controlSize(.small) }
+                }.disabled(appState.prismBusy)
+                if appState.canCancelPrismAuthorization {
+                    Button("Cancel Sign-in") { appState.cancelPrismAuthorization() }
+                }
+                Text(appState.prismMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                if !appState.prismOutbox.isEmpty { deliveries }
+            }
+            Section("Markdown") {
+                LabeledContent("Export folder") {
+                    Text(appState.markdownDirectory.isEmpty ? "Not selected" : URL(fileURLWithPath: appState.markdownDirectory).lastPathComponent)
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        .help(appState.markdownDirectory)
+                    Button("Choose…") { choosingMarkdownFolder = true }
+                }
+                if let folderError { Label(folderError, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary) }
+                DisclosureGroup("Advanced") {
+                    TextField("Folder path", text: $appState.markdownDirectory)
+                    TextField("Legacy CLI endpoint", text: $appState.parachuteHost)
+                    Text("Legacy export requires the separate Parachute CLI on Mac.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }.formStyle(.grouped)
+            .contentMargins(.vertical, 8, for: .scrollContent)
+    }
+
+    private var deliveries: some View {
+        DisclosureGroup("Deliveries (\(appState.prismOutbox.count))") {
+            ForEach(appState.prismOutbox) { item in
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(appState.store.getMeeting(id: item.meetingId)?.title ?? "Meeting")
+                        Text(item.status.rawValue.replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(.secondary)
+                        if let error = item.errorMessage { Text(error).font(.caption).foregroundStyle(.secondary) }
+                    }
+                    Spacer()
+                    if item.status != .synced && item.status != .revoked {
+                        Button("Cancel") { Task { await appState.cancelPrismDelivery(id: item.id) } }
+                            .disabled(appState.prismBusy)
                     }
                 }
             }
-            .padding(24)
+            Button("Retry Pending Deliveries") { Task { await appState.syncPrismOutbox() } }
+                .disabled(appState.prismBusy)
         }
-        .background(MinutesTheme.bg)
+    }
+
+    private var privacy: some View {
+        Form {
+            Section("Permissions") {
+                permissionRow("Microphone", status: permissions.micStatus) {
+                    Task { _ = await permissions.requestMicrophoneAccess() }
+                }
+                #if os(macOS)
+                permissionRow("Call audio", status: permissions.systemAudioStatus) {
+                    Task { _ = await permissions.requestSystemAudioAccess() }
+                }
+                #endif
+                permissionRow("Apple Calendar", status: permissions.calendarStatus) {
+                    Task { await appState.connectCalendar(); permissions.checkAllPermissions() }
+                }
+                HStack {
+                    Button("Check Again") { permissions.checkAllPermissions() }
+                    #if os(macOS)
+                    Button("System Settings…") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security") { openURL(url) }
+                    }
+                    #endif
+                }
+            }
+            Section("Your Data") {
+                Label("Audio and remembered voices stay on this device.", systemImage: "internaldrive")
+                Label("Only notes and transcripts are included in exports.", systemImage: "doc.text")
+                Text("Manage and delete remembered voices in People. Recording begins when you choose Record.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }.formStyle(.grouped)
+            .contentMargins(.vertical, 8, for: .scrollContent)
+    }
+
+    private func connectionStatus(_ connected: Bool) -> some View {
+        Label(connected ? "Connected" : "Not connected", systemImage: connected ? "checkmark.circle.fill" : "circle.dashed")
+            .font(.callout).foregroundStyle(.secondary)
+    }
+
+    private func permissionRow(_ title: String, status: PermissionStatus, action: @escaping () -> Void) -> some View {
+        LabeledContent(title) {
+            Label(status == .granted ? "Allowed" : status.rawValue, systemImage: status == .granted ? "checkmark.circle" : "circle.dashed")
+                .font(.callout).foregroundStyle(.secondary)
+            if status != .granted {
+                Button(status == .denied ? "Review…" : "Allow…") {
+                    #if os(macOS)
+                    if status == .denied, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security") { openURL(url) }
+                    else { action() }
+                    #else
+                    action()
+                    #endif
+                }
+                    .disabled(status == .restricted || status == .unavailable)
+            }
+        }
     }
 }
 #endif

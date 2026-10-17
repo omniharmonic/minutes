@@ -29,7 +29,7 @@ struct MinutesSpeakerIDTests {
         let cluster1 = SpeakerCluster(id: "c1", meetingId: "m", trackId: "t", label: "Speaker 1", centroid: [0.95, 0.05])
         let cluster2 = SpeakerCluster(id: "c2", meetingId: "m", trackId: "t", label: "Speaker 2", centroid: [0.05, 0.95])
         
-        let matcher = SpeakerMatcher(autoThreshold: 0.65, suggestThreshold: 0.50)
+        let matcher = SpeakerMatcher(autoThreshold: 0.65, suggestThreshold: 0.50, requiredModel: nil, allowAutomaticAssignment: true, minimumMargin: 0)
         let matches = matcher.match(
             clusters: [cluster1, cluster2],
             people: [personA, personB],
@@ -66,7 +66,7 @@ struct MinutesSpeakerIDTests {
         let autoThresh = 0.68
         let suggThresh = 0.52
         let bonus = 0.08
-        let matcher = SpeakerMatcher(autoThreshold: autoThresh, suggestThreshold: suggThresh, attendeeBonus: bonus)
+        let matcher = SpeakerMatcher(autoThreshold: autoThresh, suggestThreshold: suggThresh, attendeeBonus: bonus, requiredModel: nil, allowAutomaticAssignment: true, minimumMargin: 0)
         
         // CASE 1: Alice IS an attendee
         // Raw similarity: 0.53

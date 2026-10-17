@@ -5,7 +5,7 @@ import AVFoundation
 @testable import MinutesSpeech
 @testable import MinutesSpeakerID
 
-@Suite("Real Speech Pipeline & Acoustic Diarization Tests")
+@Suite("Speech plumbing and experimental spectral utility tests")
 struct PipelineSpeechTests {
     
     // Helper to generate a valid WAV file in a temporary location
@@ -109,7 +109,7 @@ struct PipelineSpeechTests {
             samples[i] = Float(0.5 * sin(2.0 * .pi * 200.0 * t))
         }
         
-        let embedding = EmbeddingService.extractEmbedding(samples: samples, sampleRate: sampleRate)
+        let embedding = ExperimentalSpectralEmbedding.extractEmbedding(samples: samples, sampleRate: sampleRate)
         #expect(embedding.count == 256)
         
         // Check L2 norm is 1.0 within epsilon
@@ -138,9 +138,9 @@ struct PipelineSpeechTests {
             voiceB[i] = Float(0.6 * sin(2 * .pi * 380 * t) + 0.3 * sin(4 * .pi * 380 * t))
         }
         
-        let embA1 = EmbeddingService.extractEmbedding(samples: voiceA1, sampleRate: sampleRate)
-        let embA2 = EmbeddingService.extractEmbedding(samples: voiceA2, sampleRate: sampleRate)
-        let embB = EmbeddingService.extractEmbedding(samples: voiceB, sampleRate: sampleRate)
+        let embA1 = ExperimentalSpectralEmbedding.extractEmbedding(samples: voiceA1, sampleRate: sampleRate)
+        let embA2 = ExperimentalSpectralEmbedding.extractEmbedding(samples: voiceA2, sampleRate: sampleRate)
+        let embB = ExperimentalSpectralEmbedding.extractEmbedding(samples: voiceB, sampleRate: sampleRate)
         
         let simA1_A2 = VectorMath.cosineSimilarity(embA1, embA2)
         let simA1_B = VectorMath.cosineSimilarity(embA1, embB)
@@ -151,13 +151,13 @@ struct PipelineSpeechTests {
         #expect(simA1_A2 > simA1_B + 0.12)
     }
     
-    @Test("DiarizationService produces clusters and segments from multi-speaker audio")
+    @Test("Experimental spectral utility segments synthetic tones; no speaker accuracy claim")
     func testDiarizationServiceClusters() throws {
         let wavURL = try Self.createSynthesizedWav(durationSec: 4.0, speaker1Freq: 150.0, speaker2Freq: 400.0)
         defer { try? FileManager.default.removeItem(at: wavURL) }
         
         let decoded = try AudioDecoder.decode(fileURL: wavURL)
-        let diarizer = DiarizationService()
+        let diarizer = ExperimentalSpectralDiarizer()
         let result = diarizer.diarize(
             samples: decoded.samples,
             sampleRate: decoded.sampleRate,
@@ -176,22 +176,18 @@ struct PipelineSpeechTests {
         }
     }
     
-    @Test("PipelineOrchestrator runs end-to-end audio decode, diarization, and alignment")
+    @Test("Pipeline routes explicit fixture diarization and transcript into utterances")
     func testPipelineOrchestratorEndToEnd() async throws {
         let wavURL = try Self.createSynthesizedWav(durationSec: 4.0, speaker1Freq: 160.0, speaker2Freq: 360.0)
         defer { try? FileManager.default.removeItem(at: wavURL) }
         
-        // Create an accompanying reference transcript text file
-        let transcriptURL = FileManager.default.temporaryDirectory.appendingPathComponent("ref_\(UUID().uuidString).txt")
-        let transcriptContent = "Welcome to the engineering architecture review. We are finalizing our offline audio pipeline."
-        try transcriptContent.write(to: transcriptURL, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: transcriptURL) }
-        
-        let orchestrator = PipelineOrchestrator()
+        let orchestrator = PipelineOrchestrator(
+            asrService: FixtureTranscriptionBackend(),
+            diarizationService: DiarizationService(backend: FixtureDiarizationBackend())
+        )
         let result = try await orchestrator.process(
             meetingId: "m_pipeline_e2e",
             audioURL: wavURL,
-            fallbackTranscriptURL: transcriptURL,
             speakerNames: [:]
         )
         
@@ -202,9 +198,47 @@ struct PipelineSpeechTests {
         #expect(!result.utterances.isEmpty)
         #expect(!result.clusters.isEmpty)
         
+        #expect(result.utterances.allSatisfy { utterance in
+            result.clusters.first(where: { $0.id == utterance.clusterId })?.label == utterance.speakerName
+        }, "Diarization labels must reach utterances; storage IDs are not speaker display names")
+
         // Utterance words must match transcript tokens
         let allUtteranceWords = result.utterances.flatMap { $0.words }.map { $0.word }
         #expect(allUtteranceWords.contains("engineering"))
         #expect(allUtteranceWords.contains("architecture"))
+    }
+}
+
+struct FixtureTranscriptionBackend: SpeechTranscriptionBackend {
+    func transcribe(audioURL: URL, fallbackTranscriptURL: URL?) async throws -> [ASRWord] {
+        [ASRWord(word: "engineering", start: 0.25, end: 0.8, confidence: 1),
+         ASRWord(word: "architecture", start: 2.25, end: 2.9, confidence: 1)]
+    }
+}
+private struct FilteredTurnRecognitionFixture: SpeechTranscriptionBackend {
+    let includeSecondTurn: Bool
+    func transcribe(audioURL: URL, fallbackTranscriptURL: URL?) async throws -> [ASRWord] {
+        var words = [ASRWord(word: "first", start: 0.5, end: 5.5, confidence: 0)]
+        if includeSecondTurn { words.append(.init(word: "second", start: 6.5, end: 11.5, confidence: 1)) }
+        return words
+    }
+}
+
+extension PipelineSpeechTests {
+    @Test(arguments: [false, true])
+    func confidenceFilteringCannotSilentlyRemoveSubstantialDetectedSpeech(includeSecondTurn: Bool) async throws {
+        let url = try Self.createSynthesizedWav(durationSec: includeSecondTurn ? 12 : 6)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var first = [Float](repeating: 0, count: 256); first[0] = 1
+        var second = [Float](repeating: 0, count: 256); second[1] = 1
+        var segments = [TrainedSpeakerSegment(speakerID: "one", start: 0, end: 6, embedding: first)]
+        if includeSecondTurn { segments.append(.init(speakerID: "two", start: 6, end: 12, embedding: second)) }
+        let pipeline = PipelineOrchestrator(asrService: FilteredTurnRecognitionFixture(includeSecondTurn: includeSecondTurn),
+            diarizationService: DiarizationService(backend: FixtureDiarizationBackend(output: segments)))
+        do {
+            _ = try await pipeline.process(meetingId: "filtered-turn", audioURL: url)
+            Issue.record("Detected speech was silently removed by confidence filtering")
+        } catch is ASRError {}
+        #expect(FileManager.default.fileExists(atPath: url.path))
     }
 }

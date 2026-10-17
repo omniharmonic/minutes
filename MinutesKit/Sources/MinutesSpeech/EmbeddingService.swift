@@ -1,7 +1,9 @@
 import Foundation
 import Accelerate
 
-public enum EmbeddingService {
+/// Experimental spectral features, not trained speaker embeddings.
+/// These must never be persisted as biometric voiceprints.
+public enum ExperimentalSpectralEmbedding {
     public static let embeddingDimension = 256
     
     /// Extracts a normalized 256-dimensional acoustic MFCC/spectral embedding from audio samples.

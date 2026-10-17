@@ -1,5 +1,10 @@
 // swift-tools-version: 6.0
 import PackageDescription
+import Foundation
+
+let cliInfoPlist = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Sources/minutes-cli/Info.plist").path
+
+let appInfoPlist = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Sources/MinutesApp/Info.plist").path
 
 let package = Package(
     name: "MinutesKit",
@@ -18,7 +23,7 @@ let package = Package(
         .executable(name: "MinutesApp", targets: ["MinutesApp"]),
         .executable(name: "minutes-cli", targets: ["minutes-cli"])
     ],
-    dependencies: [],
+    dependencies: [.package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7")],
     targets: [
         .target(
             name: "MinutesCore",
@@ -28,7 +33,7 @@ let package = Package(
         ),
         .target(
             name: "MinutesSpeech",
-            dependencies: ["MinutesCore"]
+            dependencies: ["MinutesCore", .product(name: "FluidAudio", package: "FluidAudio")]
         ),
         .target(
             name: "MinutesSpeakerID",
@@ -67,7 +72,9 @@ let package = Package(
                 "MinutesSummarize",
                 "MinutesExport",
                 "MinutesUI"
-            ]
+            ],
+            exclude: ["Info.plist"],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", appInfoPlist], .when(platforms: [.macOS]))]
         ),
         .executableTarget(
             name: "minutes-cli",
@@ -78,9 +85,12 @@ let package = Package(
                 "MinutesCalendar",
                 "MinutesSummarize",
                 "MinutesExport"
-            ]
+            ],
+            exclude: ["Info.plist"],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", cliInfoPlist], .when(platforms: [.macOS]))]
         ),
         // Test targets
+        .testTarget(name: "MinutesAppTests", dependencies: ["MinutesApp"]),
         .testTarget(
             name: "MinutesCoreTests",
             dependencies: ["MinutesCore", "MinutesSummarize"]
