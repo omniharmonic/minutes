@@ -33,6 +33,7 @@ func printHelp() {
       minutes-cli audio-input
       minutes-cli capture-system --output-dir <new-directory> --seconds <duration> [--system-only] [--request-permission]
       minutes-cli caption-fixture
+      minutes-cli caption-voice-file <audio-path> [--data-dir <path>]
       minutes-cli caption-file <audio-path>  (silent local preview; existing Speech consent required)
       minutes-cli models status|setup|prepare
       minutes-cli events [--today | --days 7] [--json] [--request-access]
@@ -79,6 +80,21 @@ struct MinutesCLI {
                 }, notice: { print($0) })
                 defer { recognizer.stop() }
                 try await CaptionFileFixture.feed(url: URL(fileURLWithPath: args[2]))
+                await recognizer.finish()
+                return
+            }
+            if cmd == "caption-voice-file", args.count >= 3 {
+                let store = try getStore(dataDir: dataDir)
+                let samples = try AudioDecoder.decode(fileURL: URL(fileURLWithPath: args[2]), targetSampleRate: 16000).samples
+                let matcher = LiveVoiceMatcher()
+                var windows = 0, named = 0
+                for start in stride(from: 0, to: samples.count, by: 10 * 16000) {
+                    let slice = Array(samples[start..<min(samples.count, start + 10 * 16000)])
+                    let name = try await matcher.name(samples: slice, rate: 16000,
+                        people: store.listPeople(), voiceprints: store.listVoiceprints())
+                    windows += 1; if name != nil { named += 1 }
+                }
+                print("Caption voice windows: \(windows); provisional matches: \(named). No profiles changed.")
                 return
             }
             if cmd == "caption-fixture" {

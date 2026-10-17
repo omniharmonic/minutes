@@ -25,3 +25,15 @@ struct LiveCaptionHistoryTests {
         #expect(history.lines[0].text.count == 4000)
     }
 }
+
+@Test func provisionalNamesSurviveTextUpdatesWithoutRecreatingEvictedLines() {
+    var history = LiveCaptionHistory(limit: 1)
+    history.update(id: "first", text: "Partial", source: "Mac audio", isFinal: false)
+    history.identify(id: "first", name: "Synthetic person")
+    history.update(id: "first", text: "Final words", source: "Mac audio", isFinal: true)
+    #expect(history.lines.first?.speakerName == "Synthetic person")
+    history.update(id: "second", text: "Next", source: "Mac audio", isFinal: false)
+    history.identify(id: "first", name: "Late result")
+    #expect(history.lines.count == 1)
+    #expect(history.lines.first?.speakerName == nil)
+}

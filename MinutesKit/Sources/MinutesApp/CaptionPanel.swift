@@ -21,6 +21,9 @@ private final class CaptionPanel: NSPanel {
 
 @MainActor final class CaptionPanelController {
     let model = CaptionPanelModel()
+    var savedVoices: () -> ([Person], [Voiceprint]) = { ([], []) }
+    private let voiceMatcher = LiveVoiceMatcher()
+    private var identityTask: Task<Void, Never>?
     private var panel: CaptionPanel?
     private let recognizer = LiveCaptionRecognizer()
     private var demoTask: Task<Void, Never>?
@@ -35,23 +38,47 @@ private final class CaptionPanel: NSPanel {
     }
     func begin() {
         guard enabled else { return }
-        generation = UUID(); demoTask?.cancel(); model.demo = false
+        generation = UUID(); identityTask?.cancel(); identityTask = nil; demoTask?.cancel(); model.demo = false
         model.history = LiveCaptionHistory(); model.recording = true; model.following = true
         model.status = "Listening locally · preview may change"
         do {
-            try recognizer.start(update: { [weak self] id, text, source, final in
+            let (people, voices) = savedVoices()
+            let token = generation
+            let identify: LiveCaptionRecognizer.AudioWindow = { [weak self] id, samples, rate in
+                guard let self, self.identityTask == nil else { return } // No inference backlog.
+                self.identityTask = Task { [weak self] in
+                    guard let self else { return }
+                    defer { if self.generation == token { self.identityTask = nil } }
+                    do {
+                        let name = try await self.voiceMatcher.name(samples: samples, rate: rate, people: people, voiceprints: voices)
+                        guard !Task.isCancelled, self.generation == token, let name else { return }
+                        self.model.history.identify(id: id, name: name)
+                    } catch {
+                        guard !Task.isCancelled, self.generation == token else { return }
+                        self.model.status = "Live voice matching unavailable · captions and recording continue"
+                    }
+                }
+            }
+            try recognizer.start(audioWindow: voices.isEmpty ? nil : identify, update: { [weak self] id, text, source, final in
                 self?.model.history.update(id: id, text: text, source: source, isFinal: final)
             }, notice: { [weak self] message in self?.model.status = message })
         } catch { model.recording = false; model.status = "Captions unavailable: \(error.localizedDescription)" }
         present()
     }
     func finish() {
-        generation = UUID(); demoTask?.cancel(); demoTask = nil
-        recognizer.stop(); model.recording = false; model.history.finish()
+        demoTask?.cancel(); demoTask = nil
+        let token = generation
+        model.recording = false
+        Task { [weak self] in
+            guard let self else { return }
+            await self.recognizer.finish()
+            guard self.generation == token else { return }
+            self.model.history.finish()
+        }
         model.status = "Recording ended · final transcript is in Minutes"
     }
     func close() {
-        generation = UUID(); enabled = false; demoTask?.cancel(); demoTask = nil; recognizer.stop()
+        generation = UUID(); identityTask?.cancel(); identityTask = nil; enabled = false; demoTask?.cancel(); demoTask = nil; recognizer.stop()
         model.recording = false; panel?.orderOut(nil)
     }
     func focus() { present(); panel?.makeKeyAndOrderFront(nil) }
@@ -70,7 +97,9 @@ private final class CaptionPanel: NSPanel {
                 self.model.status = "File preview ended: \(error.localizedDescription)"
             }
             guard let self, self.generation == token else { return }
-            self.recognizer.stop(); self.model.recording = false; self.model.history.finish()
+            await self.recognizer.finish()
+            guard self.generation == token else { return }
+            self.model.recording = false; self.model.history.finish()
             self.model.status = self.model.history.lines.isEmpty ? "No preview text received · check local Speech availability" : "File preview complete · no audio was played"
         }
     }
@@ -193,7 +222,7 @@ private struct CaptionPanelView: View {
                             }
                             ForEach(model.history.lines) { line in
                                 VStack(alignment: .leading, spacing: 5) {
-                                    Text(line.source).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                    Text(line.speakerName.map { "\($0) · likely · \(line.source)" } ?? line.source).font(.caption.weight(.medium)).foregroundStyle(.secondary)
                                     Text(line.text).font(.system(size: 20, weight: .medium)).lineSpacing(5)
                                         .foregroundStyle(line.isFinal ? .primary : .secondary)
                                         .textSelection(.enabled)

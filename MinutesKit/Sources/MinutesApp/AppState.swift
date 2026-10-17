@@ -40,7 +40,14 @@ public enum NavigationSection: String, CaseIterable, Identifiable {
 @MainActor
 public final class AppState: ObservableObject {
     #if os(macOS)
-    lazy var captionPanel = CaptionPanelController()
+    lazy var captionPanel: CaptionPanelController = {
+        let panel = CaptionPanelController()
+        panel.savedVoices = { [weak self] in
+            guard let self else { return ([], []) }
+            return (self.store.listPeople(), self.store.listVoiceprints())
+        }
+        return panel
+    }()
     #endif
     @Published public var selectedSection: NavigationSection = .meetings
     @Published public var meetings: [Meeting] = []

@@ -33,7 +33,7 @@ let package = Package(
         ),
         .target(
             name: "MinutesSpeech",
-            dependencies: ["MinutesCore", .product(name: "FluidAudio", package: "FluidAudio")]
+            dependencies: ["MinutesCore", "MinutesSpeakerID", .product(name: "FluidAudio", package: "FluidAudio")]
         ),
         .target(
             name: "MinutesSpeakerID",

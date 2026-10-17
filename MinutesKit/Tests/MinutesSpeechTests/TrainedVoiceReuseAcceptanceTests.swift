@@ -22,7 +22,10 @@ struct TrainedVoiceReuseAcceptanceTests {
         try models.validateDiarizationModels() // Read installed weights; never setup/download.
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("minutes-generated-identity-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            if environment["MINUTES_KEEP_GENERATED_IDENTITY_FIXTURE"] == "1" { print("GENERATED_IDENTITY_DIRECTORY " + root.path) }
+            else { try? FileManager.default.removeItem(at: root) }
+        }
         let service = DiarizationService(backend: FluidDiarizationBackend(models: models))
         func audio(_ turns: [Int]) throws -> [Float] {
             try turns.flatMap { index in
@@ -72,6 +75,34 @@ struct TrainedVoiceReuseAcceptanceTests {
               "enrollmentAcousticClusters": amberEnrollment.clusters.count, "controlEnrollmentAcousticClusters": danielEnrollment.clusters.count])
         #expect(aToA >= 0.88 && aToA - aToB >= 0.12)
         #expect(bToB >= 0.88 && bToB - bToA >= 0.12)
+        let liveMatcher = LiveVoiceMatcher(backend: FluidDiarizationBackend(models: models))
+        let liveA = try await liveMatcher.name(samples: Array(try audio([4]).prefix(10 * 16000)), rate: 16000,
+            people: reloaded.listPeople(), voiceprints: profiles)
+        let liveB = try await liveMatcher.name(samples: Array(try audio([5]).prefix(10 * 16000)), rate: 16000,
+            people: reloaded.listPeople(), voiceprints: profiles)
+        #expect(liveA == amber.displayName)
+        #expect(liveB == daniel.displayName)
+        emit(["liveWindowsNamed": [liveA, liveB].compactMap { $0 }.count])
+        struct Truth: Decodable {
+            struct Turn: Decodable { let voice: String; let start: Double; let end: Double }
+            let turns: [Turn]
+        }
+        let truth = try JSONDecoder().decode(Truth.self, from: Data(contentsOf: fixtureRoot.appendingPathComponent("ground-truth.json")))
+        let longAudio = try AudioDecoder.decode(fileURL: fixtureRoot.appendingPathComponent("minutes-two-speaker-long.wav"), targetSampleRate: 16000).samples
+        var namedWindows = 0
+        for start in stride(from: 0, to: longAudio.count, by: 10 * 16000) {
+            let end = min(longAudio.count, start + 10 * 16000)
+            let name = try await liveMatcher.name(samples: Array(longAudio[start..<end]), rate: 16000,
+                people: reloaded.listPeople(), voiceprints: profiles)
+            guard let name else { continue }
+            namedWindows += 1
+            let voices = Set(truth.turns.filter { $0.end > Double(start) / 16000 && $0.start < Double(end) / 16000 }.map(\.voice))
+            #expect(voices.count == 1, "A caption block spanning different known voices must abstain")
+            let expected = voices.first == "Samantha" ? amber.displayName : daniel.displayName
+            #expect(name == expected, "A named generated window must match its ground truth")
+        }
+        #expect(namedWindows > 0)
+        emit(["longFixtureWindows": (longAudio.count + 159999) / 160000, "longFixtureNamedWindows": namedWindows])
         let probes = [probeA, probeB]
         let utterances = probes.enumerated().map { index, cluster in
             Utterance(id: index + 1, meetingId: cluster.meetingId, clusterId: cluster.id,
