@@ -216,3 +216,10 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [ ] External TestFlight remains gated on Apple's build41 review;44 supersedes43 for the next public beta update. See docs/release/2026-10-17-build43.md for both builds.
 
 2026-10-17: Apple processed build44 (c922a7d8-2af7-44ca-b15e-696aa50857ea), assigned Minutes Internal and saved What to Test. Build41 remains Waiting for Review; Apple blocks a second external review submission for version1.0.0 until approval. Evidence: build/Release44/TestFlight44-saved.png. Physical TestFlight installation of44 has not been verified.
+
+### 2026-10-17 — Mac native reverse-teleprompter preview (build45)
+- [x] Optional camera-adjacent NSPanel, native Liquid Glass, compact/expanded modes, scrollable bounded history, pause-on-scroll/Live, display selection and explicit keyboard focus.
+- [x] Local-only streaming Apple Speech preview receives bounded copies after durable audio writes. Microphone/system integration is implemented; voice identity remains separate. CLI text/file fixtures never open audio devices.
+- [x]342 model-free tests, native synthetic-text scroll/collapse checks, actual silent file partial recognition, iOS simulator compatibility build and Mac Developer ID/notarization passed. See docs/release/2026-10-17-mac-captions.md.
+- [ ] Live device capture with captions enabled, dual-source recognition, long endurance, cross-display/fullscreen/accessibility matrix and streaming speaker identity require further validation.
+- [x] Rechecked Apple after fresh login:41 Waiting for Review;44 ready/internal. Public invitation is not accepting new testers.

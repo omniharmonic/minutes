@@ -57,6 +57,7 @@ final class CaptureWriteState: @unchecked Sendable {
         }
         do {
             try writer(buffer)
+            CaptionAudioFeed.shared.offer(buffer, source: "Microphone")
             frameCount += Int64(buffer.frameLength)
             if buffer.frameLength > 0 {
                 lastCommittedFrameAt = time

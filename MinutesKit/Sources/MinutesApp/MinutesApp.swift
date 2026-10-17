@@ -85,6 +85,19 @@ public struct MinutesApp: App {
         .windowToolbarStyle(.unified)
         .defaultSize(width: 1292, height: 864)
         .commands {
+            CommandMenu("Captions") {
+                Button("Focus Caption History") { startup.state?.captionPanel.focus() }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                Button("Preview Captions from Audio File…") {
+                    let picker = NSOpenPanel(); picker.canChooseDirectories = false; picker.allowsMultipleSelection = false
+                    picker.message = "Read an audio file silently into local live captions. No recording or playback."
+                    if picker.runModal() == .OK, let url = picker.url { startup.state?.captionPanel.previewFile(url) }
+                }.disabled(startup.state?.isRecording == true)
+                Button("Show Live Captions") { if let state = startup.state { state.captionPanel.show(recording: state.isRecording) } }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Preview Captions Silently") { startup.state?.captionPanel.preview() }
+                    .disabled(startup.state?.isRecording == true)
+            }
             CommandGroup(after: .textEditing) {
                 Button("Find in Transcript") { NotificationCenter.default.post(name: Notification.Name("MinutesFindInTranscript"), object: nil) }
                     .keyboardShortcut("f", modifiers: .command)
@@ -143,6 +156,7 @@ public struct MinutesApp: App {
                 
                 Divider()
                 
+                Button("Show Live Captions") { appState.captionPanel.show(recording: appState.isRecording) }
                 Button("Open Minutes Window") {
                     NSApp.activate(ignoringOtherApps: true)
                     for window in NSApp.windows where window.canBecomeMain {

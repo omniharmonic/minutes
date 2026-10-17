@@ -39,6 +39,9 @@ public enum NavigationSection: String, CaseIterable, Identifiable {
 
 @MainActor
 public final class AppState: ObservableObject {
+    #if os(macOS)
+    lazy var captionPanel = CaptionPanelController()
+    #endif
     @Published public var selectedSection: NavigationSection = .meetings
     @Published public var meetings: [Meeting] = []
     @Published public var selectedMeetingId: String? = nil
@@ -267,6 +270,7 @@ public final class AppState: ObservableObject {
         recordingMeetingId = id
         captureSourceDirectory = directory
         isRecording = true; recordingDuration = 0; recordingMeter.reset(level: nil)
+        captionPanel.begin()
         statusMessage = includeMicrophone
             ? "Recording call audio and microphone as separate local tracks. Use headphones to reduce echo."
             : "Recording Mac audio only. Microphone is off."
@@ -649,6 +653,9 @@ public final class AppState: ObservableObject {
         self.recordingMeetingId = mId
         recordingPlaceholderTitle = event == nil ? meeting.title : nil
         isRecording = true
+        #if os(macOS)
+        captionPanel.begin()
+        #endif
         recordingDuration = 0.0
         recordingMeter.reset()
         loadInitialData()
@@ -685,6 +692,9 @@ public final class AppState: ObservableObject {
         isFinalizingRecording = true
         defer { isFinalizingRecording = false }
         isRecording = false
+        #if os(macOS)
+        captionPanel.finish()
+        #endif
         recordingMeter.finish()
         if recordingDuration != recordingMeter.duration { recordingDuration = recordingMeter.duration }
         recordingTimer?.cancel()

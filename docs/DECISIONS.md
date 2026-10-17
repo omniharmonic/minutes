@@ -101,3 +101,7 @@ A live generated system-audio test proved the clean system track matches its sou
 ### 2026-10-16: expose microphone-free Mac audio capture
 
 The native source chooser previously exposed only microphone and combined capture even though the shared capture CLI already supports `--system-only`. Expose Mac audio only in the app, forward `includeMicrophone: false` to ScreenCaptureKit/archive, and skip microphone consent in recording preflight for that source. UI must explicitly state the microphone is off and omit microphone route/echo guidance. This is macOS device capture; it does not add device capture on iOS. Controlled playback tests must verify hardware mute before starting when silent testing is requested, and must not start a microphone capture as a substitute.
+
+## 2026-10-17: Apple Speech for first Mac reverse-teleprompter preview
+
+Use the existing on-device Apple recognizer for the first bounded live text spike rather than introducing EOU model provisioning in the same change. Keep native captions optional, disposable and independent from final saved transcription. Both source feed and history have explicit bounds; unsupported local recognition fails closed. The NSPanel sits below the physical cutout and uses public native glass; it does not emulate an iOS system API. Streaming voice identity and iOS ActivityKit remain subsequent work.

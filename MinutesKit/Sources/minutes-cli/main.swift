@@ -32,6 +32,8 @@ func printHelp() {
       minutes-cli speech-regions <audio-path>
       minutes-cli audio-input
       minutes-cli capture-system --output-dir <new-directory> --seconds <duration> [--system-only] [--request-permission]
+      minutes-cli caption-fixture
+      minutes-cli caption-file <audio-path>  (silent local preview; existing Speech consent required)
       minutes-cli models status|setup|prepare
       minutes-cli events [--today | --days 7] [--json] [--request-access]
       minutes-cli bind-event <meeting-id> <event-occurrence-id> [--today | --days 7]
@@ -70,6 +72,23 @@ struct MinutesCLI {
         
         do {
             if ["help", "--help", "-h"].contains(cmd) { printHelp(); return }
+            if cmd == "caption-file", args.count >= 3 {
+                let recognizer = LiveCaptionRecognizer()
+                try recognizer.start(update: { _, text, source, final in
+                    print("[\(source)] \(final ? "final" : "partial"): \(text)")
+                }, notice: { print($0) })
+                defer { recognizer.stop() }
+                try await CaptionFileFixture.feed(url: URL(fileURLWithPath: args[2]))
+                return
+            }
+            if cmd == "caption-fixture" {
+                var history = LiveCaptionHistory(limit: 3)
+                history.update(id: "one", text: "A partial", source: "Fixture", isFinal: false)
+                history.update(id: "one", text: "A revised complete phrase.", source: "Fixture", isFinal: true)
+                for i in 2...5 { history.update(id: String(i), text: "Silent caption \(i)", source: "Fixture", isFinal: true) }
+                for line in history.lines { print("\(line.id): \(line.text)") }
+                return
+            }
             if cmd == "trash" {
                 var values = Array(args.dropFirst(2))
                 if let i = values.firstIndex(of: "--data-dir"), i + 1 < values.count { values.removeSubrange(i...i+1) }

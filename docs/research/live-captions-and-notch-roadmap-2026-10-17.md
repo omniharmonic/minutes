@@ -1,5 +1,7 @@
 # Local live captions, speaker names and a camera-adjacent UI
 
+Implementation update: Mac build45 now has an optional native panel and local Apple Speech preview; see [implementation and validation](../release/2026-10-17-mac-captions.md). Streaming identity and iPhone ActivityKit remain research.
+
 Research date: **2026-10-17**. Research only; no production implementation, model download, audio playback, app launch or measured benchmark was performed. “Available API” means present in the inspected dependency/public documentation. Performance targets below are proposed gates, not results.
 
 ## Recommendation

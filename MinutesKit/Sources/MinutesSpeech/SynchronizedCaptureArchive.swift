@@ -189,6 +189,7 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
                 }
                 guard let file = writer.file else { throw Self.failure("Audio source file is closed.") }
                 try file.write(from: buffer)
+                CaptionAudioFeed.shared.offer(buffer, source: source == .system ? "Mac audio" : "Microphone")
                 if continuous {
                     writer.timeline.segments[writer.timeline.segments.count - 1].frameCount += count
                 } else {
