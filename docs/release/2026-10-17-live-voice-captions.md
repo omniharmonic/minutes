@@ -27,3 +27,11 @@ Native system-capture and long-session results will be recorded below after veri
 - The installed app was launched with `MINUTES_LIBRARY_DIRECTORY=/tmp/minutes-caption46-acceptance`, containing synthetic generated profiles only. The normal library is unchanged. Quit this test launch and reopen normally after acceptance to return to the real library.
 
 Local evidence: `/tmp/minutes-captions46-final-tests.log`, `/tmp/minutes-live-voice-long-test.log`, `/tmp/minutes-long-live-identity.log`, `/tmp/minutes-captions46-ios.log`, `/tmp/minutes-captions46-package.log`. The native system test should use `/tmp/minutes-virtual-play` with the six-minute generated fixture, fail-closed BlackHole output verification, Mac audio only selected, captions visible, and no microphone. It must not be reported as passed based on this file-only acceptance.
+
+## Native acceptance completed after unlock
+
+Build46 completed a409.02-second ScreenCaptureKit capture with the354.65-second generated two-voice fixture routed exclusively to BlackHole. No physical output route was changed, no microphone track existed, and capture finalized without issues. Both saved fictional profiles appeared as provisional names in the native live panel during multiple turns. Scroll-back stayed anchored during updates; Live resumed following; compact/expanded modes worked; Stop ended with “Recording ended · final transcript is in Minutes.”
+
+A recognition-restart notice appeared near the end; the final caption history reached turn18 and Stop cleared the notice. This does not establish uninterrupted word-perfect preview recognition. The saved recording processed successfully, including an automatic summary:19 utterances,18/18 ground-truth turns with the correct dominant speaker,810 reference words,794 transcript words,4.81% raw normalized word error rate. That metric is for the final batch transcript, not the live preview. Profiles remained at2; no automatic enrollment occurred.
+
+Evidence: `audit/live-system-captions-build46.json`; local screenshot `build/Captions46/system-audio-live-speakers.png`. The virtual player exited successfully, recording stopped, the test instance quit, and Minutes reopened normally with the original254-meeting library. This supersedes the pending-unlock/current-test-launch notes above. Real-human, overlap and multi-hour validation remain future gates.

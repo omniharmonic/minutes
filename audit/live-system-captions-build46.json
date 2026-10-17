@@ -1,0 +1,35 @@
+{
+  "build": 46,
+  "meetingID": "45ac95c9-dcce-431d-ad6d-fd6760f0caee",
+  "durationSeconds": 409.0200000000186,
+  "captureCompleted": true,
+  "captureIssues": [],
+  "sources": [
+    "system"
+  ],
+  "microphoneFiles": 0,
+  "stimulusOutput": "BlackHole virtual output only",
+  "physicalPlayback": false,
+  "systemOutputChanged": false,
+  "liveNamesObserved": [
+    "Amber Fixture",
+    "Control Fixture"
+  ],
+  "liveLabelsProvisional": true,
+  "finalUtterances": 19,
+  "referenceWords": 810,
+  "transcriptWords": 794,
+  "rawWordErrorRate": 0.04814814814814815,
+  "turnDominantSpeakerMatches": 18,
+  "turnsExpected": 18,
+  "savedProfileCount": 2,
+  "automaticSummarySaved": true,
+  "scrollBackAndResumeVerified": true,
+  "compactAndExpandedVerified": true,
+  "captionCompletionStateVerified": true,
+  "recognitionRestartNoticeObserved": true,
+  "limitations": [
+    "Generated speech only; no real-human or overlap accuracy claim",
+    "Live caption word accuracy not measured; final transcript WER is separate"
+  ]
+}
