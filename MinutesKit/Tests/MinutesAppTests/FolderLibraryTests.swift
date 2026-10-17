@@ -27,6 +27,26 @@ struct FolderLibraryTests {
         let preferences = UserDefaults(suiteName: UUID().uuidString)!
         return (root, store, preferences)
     }
+    @Test("Trash clears selected content and restore returns the meeting without losing its folder")
+    func trashAndRestoreSelection() throws {
+        let (root, store, preferences) = try fixture()
+        let meeting = Meeting(id: "trash-selected", title: "Synthetic", status: "recorded")
+        try store.saveMeeting(meeting)
+        let state = try AppState(store: store, audioDirectory: root, preferences: preferences)
+        let folder = try #require(state.folders.first)
+        try state.moveMeeting(meeting.id, to: folder.id)
+        state.selectLibrary(.folder(folder.id))
+        try state.trashMeeting(meeting.id)
+        #expect(state.currentMeeting == nil)
+        #expect(state.selectedMeetingId == nil)
+        #expect(state.libraryMeetings.isEmpty)
+        try state.restoreMeeting(meeting.id)
+        #expect(state.libraryMeetings.map(\.id) == [meeting.id])
+        #expect(state.currentMeeting?.id == meeting.id)
+        state.isRecording = true
+        #expect(throws: (any Error).self) { try state.trashMeeting(meeting.id) }
+        #expect(state.libraryMeetings.count == 1)
+    }
     @Test("Library scopes and folder deletion preserve the meeting and explicit Unfiled choice")
     func scopesAndDeletion() throws {
         let (root, store, preferences) = try fixture()

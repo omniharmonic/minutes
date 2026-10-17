@@ -12,6 +12,7 @@ struct IOSMeetingDetail: View {
     @State private var transcriptFindRequest = 0
     @State private var view = "Notes"
     @State private var moveError: String?
+    @State private var confirmingRegeneration = false
 
     var body: some View {
         Group {
@@ -45,6 +46,11 @@ struct IOSMeetingDetail: View {
                             save { guard var latest = state.store.getMeeting(id: meetingID) else { return }; latest.title = title; try state.store.saveMeeting(latest); state.selectMeeting(id: meetingID) }
                         }), axis: .vertical).font(.system(size: 28, weight: .bold)).lineLimit(1...3)
                             .textFieldStyle(.plain).accessibilityLabel("Meeting title")
+                        Menu {
+                            MeetingFolderDestinations(folders: state.folders) { folderID in
+                                do { try state.moveMeeting(meetingID, to: folderID) } catch { moveError = error.localizedDescription }
+                            }
+                        } label: { Label(state.folderName(for: meetingID), systemImage: "folder").font(.subheadline).foregroundStyle(.secondary) }
                         NotesView(meeting: meeting, summary: state.currentSummary, utterances: state.currentUtterances, attendees: state.currentAttendees, bookmarks: state.currentBookmarks,
                             onSaveNotes: { text in save { guard var latest = state.store.getMeeting(id: meetingID) else { return }; latest.userNotes = text; try state.store.saveMeeting(latest); state.selectMeeting(id: meetingID) } },
                             onSaveBookmark: { bookmark in save { try state.store.saveBookmark(bookmark); state.currentBookmarks = state.store.listBookmarks(meetingId: meetingID) } },
@@ -57,7 +63,9 @@ struct IOSMeetingDetail: View {
                 playbackAllowed: !state.isRecording && !state.isStartingRecording && !state.isFinalizingRecording,
                             usesAppleIntelligence: state.summaryUsesAppleIntelligence,
                             onEnableAppleSummary: { state.summaryUsesAppleIntelligence = true; Task { await state.generateCurrentSummary() } },
-                            onFindTranscript: findInTranscript)
+                            onFindTranscript: findInTranscript,
+                            onRegenerateRecording: { confirmingRegeneration = true },
+                            isProcessingRecording: state.isProcessing || state.isSummarizing)
                     }.padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 80).id(meetingID)
                 }.background(MinutesTheme.document)
             } else { ProgressView() }
@@ -91,32 +99,26 @@ struct IOSMeetingDetail: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if !state.currentUtterances.isEmpty {
-                    ShareLink(item: state.currentUtterances.map { "\($0.speakerName): \($0.text)" }.joined(separator: "\n\n"))
-                }
+                Picker("Meeting view", selection: $view) {
+                    Label("Notes", systemImage: "note.text").tag("Notes")
+                    Label("Transcript", systemImage: "text.alignleft").tag("Transcript")
+                    Label("Speakers", systemImage: "person.2").tag("Speakers")
+                }.pickerStyle(.menu).labelsHidden().accessibilityLabel("Meeting view")
                 Menu {
-                    Button("Find in Transcript", systemImage: "magnifyingglass", action: findInTranscript)
-                        .disabled(state.currentUtterances.isEmpty)
-                    Picker("Meeting view", selection: $view) {
-                        Text("Notes").tag("Notes")
-                        Text("Transcript").tag("Transcript")
-                        Text("Speakers").tag("Speakers")
-                    }
-                    Divider()
-                    Menu("Move to Folder", systemImage: "folder") {
-                        MeetingFolderDestinations(folders: state.folders) { folderID in
-                            do { try state.moveMeeting(meetingID, to: folderID) }
-                            catch { moveError = error.localizedDescription }
-                        }
-                    }
-                    Button("Generate Summary", systemImage: "sparkles") { Task { await state.generateCurrentSummary() } }.disabled(state.isSummarizing || state.currentUtterances.isEmpty)
-                    if hasSavedAudio {
-                        Button("Process Saved Audio") { Task { await state.processCurrentMeeting() } }.disabled(state.isRecording || state.isProcessing)
+                    if !state.currentUtterances.isEmpty {
+                        ShareLink(item: state.currentUtterances.map { "\($0.speakerName): \($0.text)" }.joined(separator: "\n\n"))
                     }
                     Button("Export to Prism", systemImage: "square.and.arrow.up") { Task { _ = await state.exportCurrentMeeting(target: "prism") } }.disabled(!state.prismVerified || state.prismBusy)
-                } label: { Image(systemName: "ellipsis").frame(minWidth: 40, minHeight: 40).accessibilityLabel("Meeting actions") }
+                } label: { Label("Share meeting", systemImage: "square.and.arrow.up") }
+
             }
         }
+        .confirmationDialog("Regenerate from recording?", isPresented: $confirmingRegeneration, titleVisibility: .visible) {
+            Button("Regenerate", role: .destructive) {
+                guard state.currentMeeting?.id == meetingID else { return }
+                Task { await state.processCurrentMeeting() }
+            }
+        } message: { Text("This reprocesses the saved audio and updates its transcript, speakers and automatic summary. Review any transcript edits and speaker choices afterward. Your notes are kept.") }
         .alert("Could not move meeting", isPresented: Binding(get: { moveError != nil }, set: { if !$0 { moveError = nil } })) {
             Button("OK") { moveError = nil }
         } message: { Text(moveError ?? "") }

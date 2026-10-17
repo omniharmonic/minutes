@@ -97,3 +97,35 @@ These are public-API-aligned design choices, not App Review preapproval. Describ
 5. **Endurance and accessibility:** sixty-minute recording while preview runs; power/thermal budget; no data loss; clear recovery; Reduce Motion, large text and VoiceOver review. Only then update ARCHITECTURE/DECISIONS with measured behavior.
 
 No new cloud service is required for the local preview. Optional server capture and optional voiceprint synchronization remain separate consent and architecture decisions; see [capture roadmap](meeting-bot-roadmap-2026-10-17.md) and [voiceprint sync](voiceprint-sync-options-2026-10-17.md).
+
+## Owner priority update: native reverse teleprompter (2026-10-17)
+
+The owner has deprioritized the meeting bot and prioritized this feature. The intended experience is a **scrollable reverse teleprompter near the webcam**, not merely a recording timer. This remains a proposal; build43 does not ship streaming captions or a Live Activity extension.
+
+### Mac interaction contract
+
+- Use an AppKit nonactivating `NSPanel` hosting SwiftUI, anchored immediately below the selected screen's camera safe area. The screen's cutout itself cannot render pixels. Respect `NSScreen.safeAreaInsets`; use a top-centered fallback on displays without a notch.
+- On macOS26, a `GlassEffectContainer` with `glassEffectID`/matched geometry can morph a compact capsule into the caption panel using Apple's real Liquid Glass. `NSGlassEffectView` is the native AppKit alternative. Earlier supported systems use a material fallback. No private Dynamic Island framework is required or assumed.
+- Compact: recording indicator, elapsed time and the latest stable phrase. Expanded: roughly three readable lines, speaker label only when sufficiently supported, and an expandable SwiftUI `ScrollView` history. Fixed panel bounds prevent each partial recognition result from moving the window.
+- Auto-follow new phrases until the user scrolls upward. Scrolling pauses follow without pausing capture. Show a small “Live”/return-to-latest control; resume only when clicked or scrolled back to the end. Preserve the reader's position when partial words revise. Keep bounded preview history and the durable final transcript separate.
+- Keyboard-accessible expanded mode may become key; compact mode must not steal focus from the call. Escape collapses. Allow dragging/repositioning and monitor selection. Reduce Motion removes expansion/morph animation; Reduce Transparency uses a readable opaque surface.
+- Validate fullscreen, Spaces, Stage Manager, external displays, menu-bar auto-hide and screen sharing. No promise of remaining above every app or hidden from screen capture. A regular caption window is always available.
+
+### iPhone: resolve the ActivityKit ambiguity
+
+**ActivityKit supports text in the Dynamic Island.** The constraint is the system-owned presentation, lifecycle and interaction model, not a ban on captions. Apple's current docs describe compact/minimal/expanded layouts, updates from the running app and buttons/toggles implemented with App Intents. They do not establish an arbitrary scrollable transcript view in the Island. Treat a free-scrolling Island history as unsupported until a public-API device experiment demonstrates otherwise; do not simulate it with hidden playback or fake video calls.
+
+- In-app reverse teleprompter: SwiftUI scrolling history positioned near the camera, automatic follow/pause/resume and real glass controls. This can provide the full requested interaction while Minutes is foreground.
+- ActivityKit experiment: short latest completed phrase in expanded presentation, recording state in compact/minimal, explicit tap to open the in-app transcript. The system controls expansion and dimensions. A prior/next-phrase App Intent experiment could offer bounded paging; it would not be free scrolling and must pass latency/usability tests before inclusion.
+- Keep Activity state under4KB; send compact completed text, not the full transcript. Local updates while capture legitimately runs do not imply guaranteed word-by-word rendering. ActivityKit does not grant microphone capture from another app's call.
+- Native iPhone Live Activities may also be presented on a paired Mac by the system; this is not an API to customize the MacBook's physical notch or replace the proposed Mac NSPanel.
+
+### Release gates
+
+1. Silent timed-file CLI streaming fixture proves bounded buffers, partial revision, stop/flush, route-reset timestamps and no impact on durable audio.
+2. Native Mac panel prototype with fixture text proves follow/scroll behavior and real Liquid Glass transitions. No microphone needed for this visual spike.
+3. Live local ASR integration, then conservative provisional voice matching. Saved confirmed voiceprints are never retrained from provisional labels.
+4. Physical iPhone ActivityKit experiment and foreground transcript reader; establish actual update cadence, suspension/lock behavior and privacy of visible words.
+5. Endurance and accessibility gates above before public beta exposure.
+
+Official documentation rechecked for this update: [Liquid Glass custom views](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views), [NSGlassEffectView](https://developer.apple.com/documentation/appkit/nsglasseffectview), [Live Activity architecture](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities), [buttons and toggles in Live Activities](https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities). No performance or App Review approval is implied by API availability.

@@ -49,7 +49,10 @@ private struct IOSRootView: View {
     @State private var creatingFolder = false
     @State private var managingFolders = false
     @State private var editingFolder: MeetingFolder?
+    @State private var deletingFolder: MeetingFolder?
     @State private var folderError: String?
+    @State private var deletingMeeting: Meeting?
+    @State private var showingTrash = false
 
     var body: some View {
         NavigationStack {
@@ -73,7 +76,13 @@ private struct IOSRootView: View {
                         }
                         .meetingFolderDropTarget(knownIDs: { Set(state.meetings.map(\.id)) },
                             move: { try state.moveMeetings($0, to: folder.id) }, onError: { folderError = $0.localizedDescription })
-                        .contextMenu { Button("Edit Folder", systemImage: "pencil") { editingFolder = folder } }
+                        .contextMenu {
+                            Button("Rename Folder", systemImage: "pencil") { editingFolder = folder }
+                            Button("Delete Folder", systemImage: "trash", role: .destructive) { deletingFolder = folder }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button("Delete", systemImage: "trash", role: .destructive) { deletingFolder = folder }
+                        }
                     }
                 }
             }
@@ -89,16 +98,36 @@ private struct IOSRootView: View {
                     Button { creatingFolder = true } label: { Label("New Folder", systemImage: "folder.badge.plus") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Edit") { managingFolders = true }.accessibilityLabel("Edit folders")
+                    Button { Task { await state.organizeUnfiledMeetings() } } label: { Label("Organize Unfiled Meetings", systemImage: "folder.badge.gearshape") }
+                        .disabled(state.isRecording || state.isProcessing || state.isOrganizingFolders || state.folders.isEmpty)
                 }
             }
             .overlay(alignment: .bottom) { recordingFooter }
             .navigationDestination(isPresented: $recorderPresented) { IOSRecordingNote(state: state) }
         }
         .tint(.primary)
+        .sheet(isPresented: $showingTrash) {
+            RecentlyDeletedView(load: { state.store.listMeetings(inTrash: true) }, restore: { try state.restoreMeeting($0) })
+        }
+        .confirmationDialog("Delete meeting?", isPresented: Binding(get: { deletingMeeting != nil }, set: { if !$0 { deletingMeeting = nil } }), titleVisibility: .visible) {
+            Button("Move to Recently Deleted", role: .destructive) {
+                if let meeting = deletingMeeting {
+                    do { try state.trashMeeting(meeting.id) } catch { folderError = error.localizedDescription }
+                }
+                deletingMeeting = nil
+            }
+        } message: { Text("You can restore this meeting and its recording from Recently Deleted in Settings.") }
         .sheet(isPresented: $creatingFolder) {
             MeetingFolderEditor(title: "New Folder") { try state.createFolder(name: $0, description: $1) }
         }
+        .confirmationDialog("Delete folder?", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }), titleVisibility: .visible) {
+            Button("Delete Folder", role: .destructive) {
+                if let folder = deletingFolder {
+                    do { try state.deleteFolder(id: folder.id) } catch { folderError = error.localizedDescription }
+                }
+                deletingFolder = nil
+            }
+        } message: { Text("Meetings are kept in Unfiled. Only the folder is removed.") }
         .sheet(isPresented: $managingFolders) { folderManager }
         .sheet(item: $editingFolder) { folder in
             MeetingFolderEditor(title: "Edit Folder", name: folder.name, description: folder.description) {
@@ -158,7 +187,11 @@ private struct IOSRootView: View {
                                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                         }
                     }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button("Delete", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
+                    }
                     .contextMenu {
+                        Button("Delete Meeting", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
                         Menu("Move to Folder", systemImage: "folder") {
                             MeetingFolderDestinations(folders: state.folders) { moveMeeting(meeting.id, to: $0) }
                         }
@@ -174,7 +207,7 @@ private struct IOSRootView: View {
         .searchable(text: $search, placement: .toolbar, prompt: "Search")
         .overlay { if filteredMeetings.isEmpty { ContentUnavailableView(search.isEmpty ? "No Meetings" : "No Results", systemImage: "note.text", description: Text(search.isEmpty ? "Record a meeting or import audio to begin." : "Try a different search.")) } }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { Menu { Button("Import Audio or Transcript", systemImage: "square.and.arrow.down") { importing = true }.disabled(state.isRecording || state.isProcessing) } label: { Label("Meeting actions", systemImage: "ellipsis.circle") } }
+            ToolbarItem(placement: .topBarTrailing) { Button("Import Recording or Transcript", systemImage: "square.and.arrow.down") { importing = true }.disabled(state.isRecording || state.isProcessing) }
 
         }
         .overlay(alignment: .bottom) { recordingFooter }
@@ -255,6 +288,7 @@ private struct IOSRootView: View {
                         Text("Setup downloads the trained speaker models once. Processing uses installed models and Apple on-device speech. Speaker names remain yours to confirm.").font(.footnote)
                     }
                     Section("Meeting folders") {
+                        Button("Recently Deleted", systemImage: "trash") { showingTrash = true }
                         Toggle("Automatically file new meetings", isOn: $state.autoFileMeetingsEnabled)
                         Button("Edit folders") { managingFolders = true }
                         Button(state.isOrganizingFolders ? "Organizing…" : "Organize Unfiled Meetings") { Task { await state.organizeUnfiledMeetings() } }

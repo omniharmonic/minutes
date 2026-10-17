@@ -10,6 +10,21 @@ public enum MeetingLibraryScope: Hashable, Sendable {
 
 @available(macOS 15.0, iOS 18.0, *)
 extension AppState {
+    public func trashMeeting(_ id: String) throws {
+        guard !isRecording, !isStartingRecording, !isProcessing, !isFinalizingRecording, !isSummarizing, !isOrganizingFolders else {
+            throw NSError(domain: "Minutes.Trash", code: 1, userInfo: [NSLocalizedDescriptionKey: "Finish the current operation before deleting a meeting."])
+        }
+        try store.trashMeeting(id: id)
+        folderLibraryRevision += 1
+        loadInitialData()
+        selectLibrary(libraryScope)
+        statusMessage = "Moved to Recently Deleted. Restore it from Settings."
+    }
+    public func restoreMeeting(_ id: String) throws {
+        try store.restoreMeeting(id: id)
+        loadInitialData()
+    }
+
     public var libraryMeetings: [Meeting] {
         switch libraryScope {
         case .all: return meetings

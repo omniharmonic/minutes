@@ -17,6 +17,8 @@ public struct NotesView: View {
     @State private var transcriptPlaybackError: String?
     public let onSaveSummary: ((String) -> Void)?
     public let onFindTranscript: (() -> Void)?
+    public let onRegenerateRecording: (() -> Void)?
+    public let isProcessingRecording: Bool
     public let playbackAllowed: Bool
     public let isSummarizing: Bool
     public let usesAppleIntelligence: Bool
@@ -51,7 +53,9 @@ public struct NotesView: View {
         playbackAllowed: Bool = true,
         usesAppleIntelligence: Bool = false,
         onEnableAppleSummary: (() -> Void)? = nil,
-        onFindTranscript: (() -> Void)? = nil
+        onFindTranscript: (() -> Void)? = nil,
+        onRegenerateRecording: (() -> Void)? = nil,
+        isProcessingRecording: Bool = false
     ) {
         self.meeting = meeting
         self._notesText = State(initialValue: meeting.userNotes ?? "")
@@ -71,6 +75,8 @@ public struct NotesView: View {
         self.usesAppleIntelligence = usesAppleIntelligence
         self.onEnableAppleSummary = onEnableAppleSummary
         self.onFindTranscript = onFindTranscript
+        self.onRegenerateRecording = onRegenerateRecording
+        self.isProcessingRecording = isProcessingRecording
         self._summaryDraft = State(initialValue: summary?.markdown ?? "")
     }
     
@@ -107,7 +113,7 @@ public struct NotesView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if let path = meeting.audioPath, meeting.platform != "transcript_import" {
-                SavedRecordingPlayer(path: path, isEnabled: playbackAllowed)
+                SavedRecordingPlayer(path: path, isEnabled: playbackAllowed, onRegenerate: onRegenerateRecording, isProcessing: isProcessingRecording)
             }
             if summary == nil { Text("Summary").font(.title3.weight(.semibold)) }
             if let summary {

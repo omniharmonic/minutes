@@ -19,6 +19,7 @@ func printHelp() {
       minutes-cli summarize <meeting-id>
       minutes-cli export <meeting-id> [--target parachute|markdown] [--output-dir <directory>]
       minutes-cli find-transcript <meeting-id> <query> [--data-dir <path>]
+      minutes-cli trash list|move|restore [meeting-id] [--data-dir <path>]
       minutes-cli show <meeting-id>
       minutes-cli people
       minutes-cli person-meetings <person-id> [--json] [--data-dir <path>]
@@ -69,6 +70,18 @@ struct MinutesCLI {
         
         do {
             if ["help", "--help", "-h"].contains(cmd) { printHelp(); return }
+            if cmd == "trash" {
+                var values = Array(args.dropFirst(2))
+                if let i = values.firstIndex(of: "--data-dir"), i + 1 < values.count { values.removeSubrange(i...i+1) }
+                guard let action = values.first, ["list", "move", "restore"].contains(action), values.count == (action == "list" ? 1 : 2) else {
+                    throw NSError(domain: "Minutes.Trash", code: 2, userInfo: [NSLocalizedDescriptionKey: "Use trash list|move|restore [meeting-id] [--data-dir <path>]."])
+                }
+                let store = try getStore(dataDir: dataDir)
+                if action == "list" { for meeting in store.listMeetings(inTrash: true) { print(meeting.id) } }
+                else if action == "move" { try store.trashMeeting(id: values[1]); print("Moved to Recently Deleted; audio preserved.") }
+                else { try store.restoreMeeting(id: values[1]); print("Meeting restored.") }
+                return
+            }
             if cmd == "find-transcript" {
                 guard args.count >= 4 else { throw NSError(domain: "Minutes.Search", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use find-transcript <meeting-id> <query> [--data-dir <path>]."]) }
                 let store = try getStore(dataDir: dataDir)

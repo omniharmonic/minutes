@@ -11,6 +11,7 @@ public struct SettingsView: View {
     @ObservedObject private var permissions = PermissionManager.shared
     @Environment(\.openURL) private var openURL
     @State private var choosingMarkdownFolder = false
+    @State private var showingTrash = false
     @State private var folderError: String?
 
     public init(appState: AppState) { self.appState = appState }
@@ -22,6 +23,7 @@ public struct SettingsView: View {
             connections.tabItem { Label("Connections", systemImage: "link") }
             privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }
         }
+        .sheet(isPresented: $showingTrash) { RecentlyDeletedView(load: { appState.store.listMeetings(inTrash: true) }, restore: { try appState.restoreMeeting($0) }) }
         .controlSize(.regular)
         .onAppear {
             appState.refreshSpeechReadiness()
@@ -47,6 +49,12 @@ public struct SettingsView: View {
                 .disabled(appState.isRecording || appState.isStartingRecording)
             }
             #endif
+            Section("Meeting folders") {
+                Button("Recently Deleted", systemImage: "trash") { showingTrash = true }
+                Toggle("Automatically file new meetings", isOn: $appState.autoFileMeetingsEnabled)
+                Text("On-device matching files confident matches. Manual folder choices are kept. Use Organize in the sidebar to file existing unfiled meetings.").font(.caption).foregroundStyle(.secondary)
+                if !appState.folderFilingMessage.isEmpty { Text(appState.folderFilingMessage).font(.caption).foregroundStyle(.secondary) }
+            }
             Section("Notes") {
                 Toggle("Summarize with Apple Intelligence", isOn: $appState.summaryUsesAppleIntelligence)
                 Picker("Default format", selection: $appState.summaryTemplate) {

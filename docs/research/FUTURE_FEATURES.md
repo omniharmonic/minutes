@@ -2,7 +2,9 @@
 
 Status as of 2026-10-17: research and staged acceptance plans, **not shipped features**. The implementation choices below remain proposals. Existing local recording, review and explicitly confirmed voice enrollment remain the baseline.
 
-## Optional server meeting capture
+Owner priority update: the server bot is deferred. Native live captions / reverse teleprompter is the next feature research and prototype priority; see the detailed spec’s October17 update for scrolling and Liquid Glass behavior.
+
+## Optional server meeting capture (deferred)
 
 [Detailed spec and source evidence](meeting-bot-roadmap-2026-10-17.md).
 

@@ -163,7 +163,7 @@ extension MinutesStore {
         lock.lock(); defer { lock.unlock() }
         let ids: [String] = try folderStatement("""
             SELECT m.id FROM meeting m LEFT JOIN meeting_folder_membership f ON f.meeting_id=m.id
-            WHERE f.folder_id IS ? ORDER BY m.started_at DESC,m.id
+            WHERE f.folder_id IS ? AND m.id NOT IN (SELECT meeting_id FROM meeting_trash) ORDER BY m.started_at DESC,m.id
             """, values: [inFolderID]) { statement in
             var result: [String] = []
             var code = sqlite3_step(statement)
@@ -176,9 +176,25 @@ extension MinutesStore {
     public func folderCounts() throws -> [String: Int] {
         lock.lock(); defer { lock.unlock() }
         var counts = Dictionary(uniqueKeysWithValues: try listFolders().map { ($0.id, 0) })
-        for membership in try listFolderMemberships() { if let id = membership.folderID { counts[id, default: 0] += 1 } }
+        let visible = Set(listMeetings().map(\.id))
+        for membership in try listFolderMemberships() where visible.contains(membership.meetingID) { if let id = membership.folderID { counts[id, default: 0] += 1 } }
         return counts
     }
+    /// Reversible deletion; never unlinks audio or erases enrolled voice profiles.
+    public func trashMeeting(id: String) throws {
+        try withImmediateTransaction {
+            guard let meeting = getMeeting(id: id) else { throw MeetingFolderError.missingMeeting }
+            guard !["starting", "recording", "processing", "transcribing", "diarizing", "summarizing"].contains(meeting.status) else {
+                throw NSError(domain: "Minutes.Trash", code: 1, userInfo: [NSLocalizedDescriptionKey: "Finish processing or recording before deleting this meeting."])
+            }
+            try folderWrite("INSERT OR IGNORE INTO meeting_trash(meeting_id,deleted_at) VALUES (?,strftime('%s','now'))", values: [id])
+        }
+    }
+    public func restoreMeeting(id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try folderWrite("DELETE FROM meeting_trash WHERE meeting_id=?", values: [id])
+    }
+
     public func unfiledMeetingCount() throws -> Int { try listMeetings(inFolderID: nil).count }
 }
 
@@ -534,6 +550,9 @@ public final class MinutesStore: @unchecked Sendable {
             guard sqlite3_exec(db, "ALTER TABLE meeting_attendee ADD COLUMN response_status TEXT NOT NULL DEFAULT 'unknown'", nil, nil, nil) == SQLITE_OK else { throw databaseError("Add invitation response") }
         }
 
+        // v9_meeting_trash: reversible deletion preserves audio and all child records.
+        guard sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS meeting_trash (meeting_id TEXT PRIMARY KEY REFERENCES meeting(id) ON DELETE CASCADE, deleted_at REAL NOT NULL);", nil, nil, nil) == SQLITE_OK else { throw databaseError("Add meeting trash") }
+
         // Upgrade user_version to at least 1 if not set
         var vStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &vStmt, nil) == SQLITE_OK {
@@ -651,8 +670,9 @@ public final class MinutesStore: @unchecked Sendable {
                EXISTS(SELECT 1 FROM speaker_cluster c WHERE c.meeting_id = m.id AND c.person_id = ?1 AND c.assignment = 'auto'),
                EXISTS(SELECT 1 FROM speaker_cluster c WHERE c.meeting_id = m.id AND c.person_id = ?1)
         FROM meeting m
-        WHERE EXISTS(SELECT 1 FROM meeting_attendee a WHERE a.meeting_id = m.id AND a.person_id = ?1)
-           OR EXISTS(SELECT 1 FROM speaker_cluster c WHERE c.meeting_id = m.id AND c.person_id = ?1)
+        WHERE m.id NOT IN (SELECT meeting_id FROM meeting_trash)
+          AND (EXISTS(SELECT 1 FROM meeting_attendee a WHERE a.meeting_id = m.id AND a.person_id = ?1)
+           OR EXISTS(SELECT 1 FROM speaker_cluster c WHERE c.meeting_id = m.id AND c.person_id = ?1))
         ORDER BY m.started_at DESC, m.id ASC
         LIMIT ?2
         """
@@ -687,12 +707,12 @@ public final class MinutesStore: @unchecked Sendable {
         return history
     }
 
-    public func listMeetings() -> [Meeting] {
+    public func listMeetings(inTrash: Bool = false) -> [Meeting] {
         lock.lock()
         defer { lock.unlock() }
         
         var list: [Meeting] = []
-        let sql = "SELECT id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes, audio_path FROM meeting ORDER BY started_at DESC"
+        let sql = "SELECT id, title, started_at, ended_at, platform, calendar_event_id, conference_url, status, device, user_notes, audio_path FROM meeting WHERE id \(inTrash ? "IN" : "NOT IN") (SELECT meeting_id FROM meeting_trash) ORDER BY started_at DESC"
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(stmt) }

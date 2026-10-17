@@ -30,7 +30,8 @@ public struct MainWindowView: View {
     @State private var confirmingReprocess = false
     @State private var reprocessMeetingID: String?
     @State private var creatingFolder = false
-    @State private var managingFolders = false
+    @State private var deletingMeeting: Meeting?
+    @State private var deletingFolder: MeetingFolder?
     @State private var editingFolder: MeetingFolder?
     @State private var keyboardScrollTarget: String?
     #if os(macOS)
@@ -53,9 +54,13 @@ public struct MainWindowView: View {
                     librarySidebarItem(.unfiled, title: "Unfiled", count: appState.folderCount(nil), destination: nil)
                     ForEach(appState.folders) { folder in
                         librarySidebarItem(.folder(folder.id), title: folder.name, count: appState.folderCount(folder.id), destination: folder.id)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button("Delete", systemImage: "trash", role: .destructive) { deletingFolder = folder }
+                            }
                             .help(folder.description.isEmpty ? folder.name : folder.description)
                             .contextMenu {
-                                Button("Edit Folder", systemImage: "pencil") { editingFolder = folder }
+                                Button("Rename Folder", systemImage: "pencil") { editingFolder = folder }
+                                Button("Delete Folder", systemImage: "trash", role: .destructive) { deletingFolder = folder }
                             }
                     }
                 }
@@ -76,7 +81,9 @@ public struct MainWindowView: View {
                 ToolbarItemGroup(placement: .automatic) {
                     Button { creatingFolder = true } label: { Label("New Folder", systemImage: "folder.badge.plus") }
                         .help("New folder")
-                    Button("Edit") { managingFolders = true }.help("Edit folders")
+                    Button { Task { await appState.organizeUnfiledMeetings() } } label: { Label("Organize Unfiled Meetings", systemImage: "folder.badge.gearshape") }
+                        .help("Organize unfiled meetings on device")
+                        .disabled(recordingBusy || appState.isOrganizingFolders || appState.folders.isEmpty)
                 }
             }
             .navigationSplitViewColumnWidth(min: 225, ideal: 225, max: 320)
@@ -114,10 +121,21 @@ public struct MainWindowView: View {
             .ignoresSafeArea().allowsHitTesting(false).accessibilityHidden(true)
         }
         .tint(.yellow)
+        .confirmationDialog("Delete meeting?", isPresented: Binding(get: { deletingMeeting != nil }, set: { if !$0 { deletingMeeting = nil } }), titleVisibility: .visible) {
+            Button("Move to Recently Deleted", role: .destructive) {
+                if let meeting = deletingMeeting { perform("delete meeting") { try appState.trashMeeting(meeting.id) } }
+                deletingMeeting = nil
+            }
+        } message: { Text("You can restore this meeting and its recording from Recently Deleted in Settings.") }
         .sheet(isPresented: $creatingFolder) {
             MeetingFolderEditor(title: "New Folder") { try appState.createFolder(name: $0, description: $1) }
         }
-        .sheet(isPresented: $managingFolders) { folderManager }
+        .confirmationDialog("Delete folder?", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }), titleVisibility: .visible) {
+            Button("Delete Folder", role: .destructive) {
+                if let folder = deletingFolder { perform("delete folder") { try appState.deleteFolder(id: folder.id) } }
+                deletingFolder = nil
+            }
+        } message: { Text("Meetings are kept in Unfiled. Only the folder is removed.") }
         .sheet(item: $editingFolder) { folder in
             MeetingFolderEditor(title: "Edit Folder", name: folder.name, description: folder.description) {
                 try appState.updateFolder(id: folder.id, name: $0, description: $1)
@@ -166,7 +184,7 @@ public struct MainWindowView: View {
             }
             Button("Cancel", role: .cancel) { reprocessMeetingID = nil }
         } message: {
-            Text("This replaces the transcript and speaker analysis. Transcript edits and speaker choices may need to be reviewed again. Your notes and summary are kept.")
+            Text("This reprocesses the saved audio and updates its transcript, speakers and automatic summary. Review any transcript edits and speaker choices afterward. Your notes are kept.")
         }
         .alert(item: $appState.calendarPrompt) { event in
             Alert(title: Text("Record \(event.title)?"), message: Text("Minutes will record your selected audio source."),
@@ -255,29 +273,7 @@ public struct MainWindowView: View {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .accessibilityLabel("Share meeting")
-                Menu {
-                    if let meeting = appState.currentMeeting {
-                        Menu("Move to Folder", systemImage: "folder") {
-                            MeetingFolderDestinations(folders: appState.folders) { moveMeeting(meeting.id, to: $0) }
-                        }
-                    }
-                    if appState.currentMeeting?.audioPath != nil {
-                        Button("Transcribe Saved Recording") {
-                            reprocessMeetingID = appState.currentMeeting?.id
-                            confirmingReprocess = true
-                        }
-                            .disabled(recordingBusy)
-                    }
-                } label: {
-                    Label("Meeting actions", systemImage: "ellipsis").foregroundStyle(.primary)
-                        .labelStyle(.iconOnly).font(.system(size: 16))
-                        .frame(width: 32, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .controlSize(.regular)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .accessibilityLabel("Meeting actions")
+
             }
             .padding(.horizontal, 6).frame(height: 36).fixedSize(horizontal: true, vertical: false)
             .minutesControlGlass(in: Capsule())
@@ -373,6 +369,7 @@ public struct MainWindowView: View {
                                 .padding(.leading, 10).padding(.trailing, 16)
                                 .id(meeting.id)
                                 .contextMenu {
+                                    Button("Delete Meeting", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
                                     Menu("Move to Folder", systemImage: "folder") {
                                         MeetingFolderDestinations(folders: appState.folders) { moveMeeting(meeting.id, to: $0) }
                                     }
@@ -429,7 +426,7 @@ public struct MainWindowView: View {
             Spacer(minLength: 0)
             Menu {
                 Button("Import Audio or Transcript…") { importing = true }
-                Button("Edit Folders…") { managingFolders = true }
+
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 16))
                     .frame(width: 32, height: 32).minutesControlGlass(in: Circle(), interactive: true)
@@ -689,7 +686,9 @@ public struct MainWindowView: View {
                 playbackAllowed: !appState.isRecording && !appState.isStartingRecording && !appState.isFinalizingRecording,
                 usesAppleIntelligence: appState.summaryUsesAppleIntelligence,
                 onEnableAppleSummary: { appState.summaryUsesAppleIntelligence = true; Task { await appState.generateCurrentSummary() } },
-                onFindTranscript: findInTranscript)
+                onFindTranscript: findInTranscript,
+                onRegenerateRecording: { reprocessMeetingID = meeting.id; confirmingReprocess = true },
+                isProcessingRecording: appState.isProcessing || recordingBusy)
         case .transcript:
             TranscriptView(utterances: appState.currentUtterances, availableSpeakers: appState.currentClusters.map(\.label), clusters: appState.currentClusters, timestampsAvailable: meeting.platform != "transcript_import", findRequest: transcriptFindRequest,
                 onSeek: { time in perform("play recording") {
