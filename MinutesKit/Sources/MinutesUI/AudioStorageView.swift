@@ -54,7 +54,7 @@ public struct AudioStorageView: View {
                 }
                 if working { ProgressView("Working… recordings stay available while this runs.").controlSize(.small) }
             } footer: {
-                Text("Compressing keeps playback and Regenerate working at about 1 MB per minute. Originals are removed only after each compressed copy is checked.")
+                Text("Recordings compress automatically after recording (about 1 MB per minute); playback and Regenerate keep working. Originals are removed only after each compressed copy is checked. Anything listed as original here is waiting its turn or could not be compressed.")
             }
             Section("Free more space") {
                 Button(role: .destructive) { pendingDeletion = trashed } label: {

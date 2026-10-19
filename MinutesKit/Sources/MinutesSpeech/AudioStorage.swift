@@ -127,9 +127,6 @@ public enum AudioStorage {
             && meeting.audioPath != nil && meeting.platform != "transcript_import"
     }
 
-    /// Statuses after a successful transcript, when compaction runs automatically.
-    public static func isTranscribed(_ meeting: Meeting) -> Bool { ["needs_review", "summarized"].contains(meeting.status) }
-
     /// Recently Deleted meetings keep their audio until it is removed here.
     static func anyMeeting(id: String, store: MinutesStore) -> Meeting? {
         store.getMeeting(id: id) ?? store.listMeetings(inTrash: true).first { $0.id == id }

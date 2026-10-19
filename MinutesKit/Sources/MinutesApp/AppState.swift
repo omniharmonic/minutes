@@ -15,6 +15,7 @@ import MinutesCalendar
 import MinutesSummarize
 import MinutesExport
 import MinutesUI
+import os
 
 public enum NavigationSection: String, CaseIterable, Identifiable {
     case meetings = "Meetings"
@@ -659,6 +660,7 @@ public final class AppState: ObservableObject {
 
     public func loadInitialData() {
         self.meetings = store.listMeetings()
+        compactStoredAudioOnce()
         self.voiceprints = store.listVoiceprints()
         reloadFolderLibrary()
         if let first = meetings.first {
@@ -839,6 +841,8 @@ public final class AppState: ObservableObject {
                 statusMessage = "Audio preserved; processing failed: \(error.localizedDescription)"
                 do { _ = try persistProcessingState(meetingId: mId, status: "recorded") }
                 catch { statusMessage += "; could not save failure state: \(error.localizedDescription)" }
+                // A retry transcribes the compressed copy as well as the original.
+                scheduleAudioCompaction(meetingID: mId)
             }
         } else {
             statusMessage = "Recording file disappeared before processing."
@@ -876,8 +880,24 @@ public final class AppState: ObservableObject {
         }.value
     }
 
+    private var didScheduleLibraryCompaction = false
+    private static let storageLogger = Logger(subsystem: "app.minutes", category: "AudioStorage")
+
+    /// Uncompressed audio has no use once copies verify, so recordings saved by
+    /// earlier versions are compressed in the background after launch.
+    private func compactStoredAudioOnce() {
+        guard !didScheduleLibraryCompaction else { return }
+        didScheduleLibraryCompaction = true
+        let ids = (store.listMeetings() + store.listMeetings(inTrash: true))
+            .filter { AudioStorage.isCompactable($0) && !AudioStorage.usage(audioPath: $0.audioPath).isCompact && AudioStorage.usage(audioPath: $0.audioPath).exists }
+            .map(\.id)
+        guard !ids.isEmpty else { return }
+        if isProcessing { pendingCompactions.formUnion(ids) }
+        else { Task(priority: .utility) { _ = await compactAudio(meetingIDs: ids, announce: false) } }
+    }
+
     private func scheduleAudioCompaction(meetingID: String) {
-        guard let meeting = store.getMeeting(id: meetingID), AudioStorage.isTranscribed(meeting), AudioStorage.isCompactable(meeting),
+        guard let meeting = store.getMeeting(id: meetingID), AudioStorage.isCompactable(meeting),
               !AudioStorage.usage(audioPath: meeting.audioPath).isCompact else { return }
         if isProcessing { pendingCompactions.insert(meetingID) }
         else { Task { _ = await compactAudio(meetingIDs: [meetingID], announce: false) } }
@@ -892,7 +912,9 @@ public final class AppState: ObservableObject {
             return 0
         }
         var freed: Int64 = 0, failures: [String] = []
-        for id in meetingIDs where !compactingMeetingIDs.contains(id) && id != recordingMeetingId {
+        for (index, id) in meetingIDs.enumerated() where !compactingMeetingIDs.contains(id) && id != recordingMeetingId {
+            // Processing may start mid-batch; it must never race compaction of its file.
+            if isProcessing { pendingCompactions.formUnion(meetingIDs[index...]); break }
             guard let meeting = store.getMeeting(id: id) ?? store.listMeetings(inTrash: true).first(where: { $0.id == id }),
                   AudioStorage.isCompactable(meeting) else { continue }
             compactingMeetingIDs.insert(id)
@@ -902,8 +924,10 @@ public final class AppState: ObservableObject {
         }
         refreshAfterAudioChange()
         let saved = ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)
-        if !failures.isEmpty { statusMessage = "Compressed recordings and freed \(saved). Some originals were kept: \(failures[0])" }
-        else if announce { statusMessage = "Compressed recordings and freed \(saved). Playback and Regenerate still work." }
+        if !failures.isEmpty {
+            Self.storageLogger.info("Kept \(failures.count, privacy: .public) originals that could not be compressed")
+            if announce { statusMessage = "Compressed recordings and freed \(saved). Some originals were kept: \(failures[0])" }
+        } else if announce { statusMessage = "Compressed recordings and freed \(saved). Playback and Regenerate still work." }
         return freed
     }
 
@@ -1029,6 +1053,7 @@ public final class AppState: ObservableObject {
                 statusMessage = "Audio saved locally; processing pending: \(error.localizedDescription)"
                 do { meeting = try persistProcessingState(meetingId: meeting.id, status: "recorded") }
                 catch { statusMessage += "; could not save processing state: \(error.localizedDescription)" }
+                scheduleAudioCompaction(meetingID: meeting.id)
             }
         }
         loadInitialData()
@@ -1073,6 +1098,7 @@ public final class AppState: ObservableObject {
             statusMessage = "Audio preserved; processing pending: \(error.localizedDescription)"
             do { _ = try persistProcessingState(meetingId: meeting.id, status: meeting.status == "interrupted" && !recoveredPathSaved ? "interrupted" : "recorded") }
             catch { statusMessage += "; could not save processing state: \(error.localizedDescription)" }
+            scheduleAudioCompaction(meetingID: meeting.id)
         }
         loadInitialData()
         selectMeeting(id: meeting.id)
