@@ -322,7 +322,17 @@ public final class DiarizationService: Sendable {
             segments.append(TimedSpeakerSegment(speakerId: id, start: item.start,
                                                 end: end, embedding: item.embedding))
         }
-        let clusters = try identifiers.values.sorted().enumerated().map { index, id in
+        let canonical = SpeakerConsolidationPolicy.standard.canonicalIDs(vectors.map { id, sum in
+            let norm = max(1e-9, sqrt(sum.reduce(Float(0)) { $0 + $1 * $1 }))
+            return (id: id, centroid: sum.map { $0 / norm }, seconds: seconds[id] ?? 0)
+        })
+        for (id, target) in canonical where id != target {
+            for index in vectors[target]!.indices { vectors[target]![index] += vectors[id]![index] }
+            seconds[target, default: 0] += seconds[id] ?? 0
+            vectors[id] = nil; seconds[id] = nil
+        }
+        segments = segments.map { TimedSpeakerSegment(speakerId: canonical[$0.speakerId] ?? $0.speakerId, start: $0.start, end: $0.end, embedding: $0.embedding) }
+        let clusters = try Set(canonical.values).sorted().enumerated().map { index, id in
             var vector = vectors[id] ?? []
             let norm = sqrt(vector.reduce(Float(0)) { $0 + $1 * $1 })
             guard norm.isFinite, norm > 0 else { throw SpeechModelsError.invalidDiarizationOutput }

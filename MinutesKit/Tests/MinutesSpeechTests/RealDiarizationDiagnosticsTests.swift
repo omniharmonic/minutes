@@ -22,6 +22,16 @@ struct RealDiarizationDiagnosticsTests {
         #expect(settings.debugMode == false)
     }
 
+    @Test("A recorded track's consolidated speaker count (opt-in; reports seconds only)",
+          .enabled(if: ProcessInfo.processInfo.environment["MINUTES_DIARIZE_FILE"] != nil))
+    func consolidatedSpeakersForRecordedTrack() async throws {
+        let url = URL(fileURLWithPath: ProcessInfo.processInfo.environment["MINUTES_DIARIZE_FILE"]!)
+        let audio = try AudioDecoder.decode(fileURL: url, targetSampleRate: 16_000)
+        let result = try await DiarizationService().diarize(samples: audio.samples, meetingId: "diagnostic")
+        emit(["kind": "consolidated_speakers", "clusters": result.clusters.count,
+              "speech_seconds": result.clusters.map { ($0.speechSeconds * 10).rounded() / 10 }.sorted(by: >)])
+    }
+
     @Test("Synthetic alternating turns: automatic clustering and clean-voice distances",
           .enabled(if: ProcessInfo.processInfo.environment["MINUTES_DIARIZATION_DIAGNOSTICS"] == "1"))
     func alternatingSyntheticVoices() throws {

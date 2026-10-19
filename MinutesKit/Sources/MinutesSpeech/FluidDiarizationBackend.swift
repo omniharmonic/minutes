@@ -50,6 +50,52 @@ struct AutomaticSpeakerClusteringPolicy: Sendable {
     static let conservative = Self(maximumAssignmentCosineDistance: 0.65)
 }
 
+/// Post-pass over the SDK's streaming clusters, which drift: a 37-minute call
+/// produced 24 call "speakers" for about 4 voices. Substantial clusters merge
+/// only when nearly identical (one voice split by drift measured 0.155; two
+/// people alternating turns over call audio measured 0.41). Fragments carry
+/// too little audio for a reliable embedding, so, as pyannote's
+/// min_cluster_size does, each joins its most similar substantial cluster on
+/// the same track without a distance bound.
+struct SpeakerConsolidationPolicy: Sendable {
+    let minimumDistinctSpeakerSeconds: Double
+    let maximumDuplicateCosineDistance: Float
+    static let standard = Self(minimumDistinctSpeakerSeconds: 5, maximumDuplicateCosineDistance: 0.25)
+
+    /// Maps each input id to the id that survives. Inputs are unit centroids.
+    func canonicalIDs(_ clusters: [(id: String, centroid: [Float], seconds: Double)]) -> [String: String] {
+        var mapping = Dictionary(uniqueKeysWithValues: clusters.map { ($0.id, $0.id) })
+        // Groups hold speech-weighted sums so merged centroids favour longer speech.
+        var groups = clusters.filter { $0.seconds >= minimumDistinctSpeakerSeconds }
+            .map { cluster in (id: cluster.id, sum: cluster.centroid.map { $0 * Float(cluster.seconds) }, seconds: cluster.seconds) }
+        guard !groups.isEmpty else { return mapping }
+        func distance(_ a: [Float], _ b: [Float]) -> Float {
+            var dot: Float = 0, na: Float = 0, nb: Float = 0
+            for i in a.indices { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
+            return 1 - dot / max(1e-9, (na * nb).squareRoot())
+        }
+        while groups.count > 1 {
+            var best: (i: Int, j: Int, d: Float)?
+            for i in groups.indices { for j in groups.indices where j > i {
+                let d = distance(groups[i].sum, groups[j].sum)
+                if d <= maximumDuplicateCosineDistance, d < (best?.d ?? .infinity) { best = (i, j, d) }
+            } }
+            guard let best else { break }
+            // The longer cluster keeps its id; the shorter one's speech joins it.
+            let (keep, drop) = groups[best.i].seconds >= groups[best.j].seconds ? (best.i, best.j) : (best.j, best.i)
+            for k in groups[keep].sum.indices { groups[keep].sum[k] += groups[drop].sum[k] }
+            groups[keep].seconds += groups[drop].seconds
+            for (id, target) in mapping where target == groups[drop].id { mapping[id] = groups[keep].id }
+            groups.remove(at: drop)
+        }
+        for cluster in clusters where cluster.seconds < minimumDistinctSpeakerSeconds {
+            let nearest = groups.min { distance(cluster.centroid, $0.sum) < distance(cluster.centroid, $1.sum) }!
+            mapping[cluster.id] = nearest.id
+        }
+        return mapping
+    }
+}
+
 /// Owns SDK state on one executor. No downloader or auto-recovery API is used
 /// here: corrupt or absent bundles fail without any network access.
 public actor FluidDiarizationBackend: SpeakerDiarizationBackend {
