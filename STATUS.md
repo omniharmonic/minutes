@@ -277,3 +277,28 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - Summary completion now saves a transcript-derived topic title atomically with the summary, including summary retries and recovered recordings. Previously naming only ran on the original recording-completion path. The meeting list, summary heading and automatic Prism payload use the saved name.
 - Preserve custom/calendar titles and concurrent title edits. Disambiguate repeated topic names with recording date/time, then an ordinal if needed. Existing timestamp-named notes can use Regenerate Summary without reprocessing audio. Naming uses the existing on-device transcript phrase scorer; insufficient meaningful text leaves the title unchanged.
 - Full Swift regression suite passes, including retry naming, duplicate topics and custom-title preservation. Opt-in real Apple-model/staging export acceptance verifies the renamed title and matching Markdown heading. All tests silent and synthetic; original important audio untouched.
+
+### 2026-10-19 — production QA: failed 37-minute call, zoomed window, mic-only suggestions / Mac build 56
+- Evidence: the owner's 37:35 call+mic capture finalized cleanly (`capture.json` complete, no issues). Both "crashes" were `exit(0)` quits, not crashes: processing *threw* (status reverted to `recorded`, 0 utterances) after only Apple "no speech" (1110) window responses. No crash reports were written for 2026-10-19.
+- [x] Root cause 1, all-or-nothing coverage: any ≥3 s detected-sound gap left after retries discarded the whole meeting, and one weak source discarded both. Now `SpeechWindows.acceptsPartialTranscript` saves transcripts with ≤50% uncovered detected sound and surfaces a persistent coverage notice (`PipelineResult.uncoveredSpeechSeconds`, `skippedSources`). A source with too little text is skipped instead of failing the other. Zero words for substantial speech still fails honestly (`TranscriptCoverageError`).
+- [x] Batch Speech requests now have a deadline (max(30 s, 3× window)) and cancellation, and retain their recognizer. A timeout is a retryable window-level miss.
+- [x] Stop no longer decodes the full recording on the main actor (header read off-main).
+- [x] Zoomed window / missing toolbar: the bottom status card used unbounded `fixedSize(vertical:)` text inside a safe-area inset (since 2afdc34), so long messages raised the window's minimum height past the screen. Now capped at 5 lines with a tooltip for the full text.
+- [x] Calendar-suggested and manual Mac recordings default to call audio + microphone; the choice persists (`captureMode`). If call-audio permission is missing, the microphone still records, with an explicit notice.
+- [x] Live captions: per-source feed budget, reset only the overflowing source, removed per-tick copy-on-write duplication of sample windows, `finish()` always releases recognizers.
+- [x] Declared the `app.minutes.meeting-identifiers` exported UTType (launch fault every start).
+- [x] Pipeline progress is now logged at info level (counts and timings only, no text).
+- [x] 374 model-free tests pass. Signed (Developer ID, not notarized) Mac build 56 at `build/qa56`.
+- [x] Real-recognizer run of the cloned 37-minute capture in an isolated library (`MINUTES_LIBRARY_DIRECTORY` via `launchctl setenv`; `open --env` does NOT propagate it): 158 utterances / 4,558 words, call track 3.1 s and mic 3.3 s uncovered.
+- [ ] Install build 56 over 55 (requires quitting the running app), then Regenerate the original meeting.
+- [ ] Open: one meeting writes ~2.1 GB (`system.caf` is 48 kHz stereo float plus three 433 MB aligned/mixed copies). Consider compact storage after acceptance.
+
+### 2026-10-19 (continued) — owner report after build 56: summary fails, 29 speakers, empty invitee list / Mac build 57
+- [x] Summary: reproduced via CLI on the QA clone. All 24 first-pass chunks succeeded, then Apple's model returned `refusal` for one 2 KB reduction chunk and the whole summary was discarded. Declined/undecodable chunks are now chunk-level misses: first-pass gaps are skipped and disclosed (fail if fewer than half succeed), declined reductions carry their validated inputs forward. Reductions use the 1–3 claim schema so they contract (previously 121→61 bullets after 6 passes, then fell back to all 121). Open-question excerpts no longer quote casual "I don't know…" or run-on (>240 char) sentences. Real run: 158 records → converged notes in ~3.5 min.
+- [x] Speakers: FluidAudio's streaming clusters gave 24 call + 5 mic clusters (21 under 3.5 s). Post-pass merges substantial clusters at cosine distance ≤0.25 and assigns <5 s fragments to the most similar substantial voice (pyannote `min_cluster_size` approach). Real audio: 3 call + 1 mic speakers. See DECISIONS 2026-10-19.
+- [x] Invitees: the 37-minute meeting was started from Record after two short calendar-bound mic attempts, so it had no event. Recording without an event now binds the single invited event in progress (±5 min lead); overlapping events stay unbound. New "Link calendar event" control on unlinked recordings lists overlapping events.
+- [x] Pipeline/summary diagnostics logged at info/error with counts and error kinds only.
+- [x] 386 model-free tests pass. Signed Mac build 57 at `build/qa57` (not notarized).
+- [x] Owner installed 57, linked the 9:33 recording to Product Tactical, regenerated and summarized: confirmed working.
+- [x] iOS build 54 (shares AppState and all MinutesKit fixes; adds the Link calendar event control to meeting detail) built, installed on the owner's iPhone and verified as version 54.
+

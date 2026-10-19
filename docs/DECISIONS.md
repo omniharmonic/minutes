@@ -105,3 +105,11 @@ The native source chooser previously exposed only microphone and combined captur
 ## 2026-10-17: Apple Speech for first Mac reverse-teleprompter preview
 
 Use the existing on-device Apple recognizer for the first bounded live text spike rather than introducing EOU model provisioning in the same change. Keep native captions optional, disposable and independent from final saved transcription. Both source feed and history have explicit bounds; unsupported local recognition fails closed. The NSPanel sits below the physical cutout and uses public native glass; it does not emulate an iOS system API. Streaming voice identity and iOS ActivityKit remain subsequent work.
+
+## 2026-10-19: Consolidate drifted speaker clusters; tolerate declined summary chunks
+
+Real 37-minute call audio invalidated the 2026-10-12 expectation that brief fragments are rare enough to review by hand: FluidAudio's streaming clusters produced 24 call and 5 microphone "speakers" for about 4 voices. After diarization, substantial clusters (≥5 s) merge only at cosine distance ≤0.25 (a single drifted voice measured 0.155; two people alternating turns over call audio measured 0.41 and stay separate). Fragments under 5 s have too little audio for a reliable embedding, so, following pyannote's `min_cluster_size`, each joins its most similar substantial cluster on the same track without a distance bound. The SDK's 0.65 assignment bound is unchanged. On the owner's recording this yields 3 call + 1 microphone speakers. A real speaker with under 5 s of total speech is absorbed into the closest voice — a deliberate trade-off.
+
+Apple's on-device model returned `refusal` for individual 2 KB chunks (mostly intermediate draft notes), which previously discarded the entire summary. A declined first-pass chunk is now skipped and disclosed in the notes (the summary fails if fewer than half succeed). A declined reduction chunk carries its already-validated inputs forward. Reduction prompts use the 1–3 claim schema so each pass contracts. Invented citations are still rejected.
+
+A recording started without a calendar choice is bound to the single invited event in progress (or starting within 5 minutes); overlapping events are left unbound. Saved recordings without an event can be linked afterwards from the notes view.
