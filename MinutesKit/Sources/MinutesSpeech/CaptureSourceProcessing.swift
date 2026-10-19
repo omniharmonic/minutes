@@ -4,7 +4,9 @@ import MinutesCore
 enum CaptureSourceProcessing {
     /// Only finalized Minutes captures have aligned, common-clock source files.
     static func sources(for processingURL: URL) throws -> [(String, URL)]? {
-        guard processingURL.lastPathComponent == "mixed.caf" else { return nil }
+        // Compacted captures (AudioStorage) keep the same layout as AAC files.
+        let ext = processingURL.pathExtension.lowercased()
+        guard processingURL.deletingPathExtension().lastPathComponent == "mixed", ["caf", "m4a"].contains(ext) else { return nil }
         let root = processingURL.deletingLastPathComponent()
         let manifestURL = root.appendingPathComponent("capture.json")
         guard FileManager.default.fileExists(atPath: manifestURL.path) else { return nil }
@@ -14,13 +16,13 @@ enum CaptureSourceProcessing {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let manifest = try decoder.decode(CaptureTimelineManifest.self, from: Data(contentsOf: manifestURL))
         guard manifest.schema == "minutes.capture/1", manifest.clock == "SCStream.synchronizationClock",
-              manifest.completed, manifest.issues.isEmpty, manifest.processingFile == "mixed.caf",
+              manifest.completed, manifest.issues.isEmpty, manifest.processingFile == processingURL.lastPathComponent,
               manifest.tracks.contains(where: { $0.source == .system }),
               Set(manifest.tracks.map(\.source)).count == manifest.tracks.count else {
             throw ASRError.audioUnreadable("This capture has incomplete source metadata. Original audio is preserved.")
         }
         return try manifest.tracks.sorted { $0.source == .system && $1.source != .system }.map { track in
-            let url = root.appendingPathComponent("aligned-\(track.source.rawValue).caf")
+            let url = root.appendingPathComponent("aligned-\(track.source.rawValue).\(ext)")
             guard track.file == "\(track.source.rawValue).caf", track.frameCount > 0,
                   url.resolvingSymlinksInPath().deletingLastPathComponent() == root.resolvingSymlinksInPath(),
                   try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {

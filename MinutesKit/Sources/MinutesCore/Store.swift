@@ -591,6 +591,18 @@ public final class MinutesStore: @unchecked Sendable {
     
     // MARK: - Meetings
     
+    /// `saveMeeting` never clears a path (COALESCE guards partial updates);
+    /// deleting a meeting's audio is the one intentional way to do so.
+    public func clearAudioPath(meetingId: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "UPDATE meeting SET audio_path = NULL WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { throw databaseError("Clear audio path") }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, (meetingId as NSString).utf8String, -1, nil)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw databaseError("Clear audio path") }
+    }
+
     public func saveMeeting(_ m: Meeting) throws {
         lock.lock()
         defer { lock.unlock() }

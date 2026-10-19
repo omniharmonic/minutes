@@ -22,6 +22,10 @@ public struct SettingsView: View {
             calendar.tabItem { Label("Calendar", systemImage: "calendar") }
             connections.tabItem { Label("Connections", systemImage: "link") }
             privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }
+            AudioStorageView(load: { await appState.audioStorageEntries() },
+                             compress: { await appState.compactAudio(meetingIDs: $0) },
+                             delete: { appState.deleteAudio(meetingIDs: $0) })
+                .tabItem { Label("Storage", systemImage: "internaldrive") }
         }
         .sheet(isPresented: $showingTrash) { RecentlyDeletedView(load: { appState.store.listMeetings(inTrash: true) }, restore: { try appState.restoreMeeting($0) }) }
         .controlSize(.regular)

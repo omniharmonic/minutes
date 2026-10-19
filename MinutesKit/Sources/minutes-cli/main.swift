@@ -39,6 +39,7 @@ func printHelp() {
       minutes-cli models status|setup|prepare
       minutes-cli events [--today | --days 7] [--json] [--request-access]
       minutes-cli bind-event <meeting-id> <event-occurrence-id> [--today | --days 7]
+      minutes-cli audio usage | compact <meeting-id|--all> | delete <meeting-id>
     """)
 }
 
@@ -242,6 +243,11 @@ struct MinutesCLI {
 
             if cmd == "prism" { try await PrismConnectionCLI.run(arguments: args, store: store); return }
             if cmd == "voices" { try VoiceEnrollmentCLI.run(arguments: args, store: store); return }
+            if cmd == "audio" {
+                let library = dataDir ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Minutes").path
+                try await AudioCLI.run(arguments: args, store: store, managedDirectory: URL(fileURLWithPath: library).appendingPathComponent("audio", isDirectory: true))
+                return
+            }
             if cmd == "folders" { try await FolderCLI.run(arguments: args, store: store); return }
             switch cmd {
             case "import", "import-transcript":

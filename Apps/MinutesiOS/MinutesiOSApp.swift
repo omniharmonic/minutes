@@ -330,6 +330,12 @@ private struct IOSRootView: View {
                     }
                     Section("Meeting folders") {
                         Button("Recently Deleted", systemImage: "trash") { showingTrash = true }
+                        NavigationLink {
+                            AudioStorageView(load: { await state.audioStorageEntries() },
+                                             compress: { await state.compactAudio(meetingIDs: $0) },
+                                             delete: { state.deleteAudio(meetingIDs: $0) })
+                                .navigationTitle("Storage")
+                        } label: { Label("Storage", systemImage: "internaldrive") }
                         Toggle("Automatically file new meetings", isOn: $state.autoFileMeetingsEnabled)
                         Button("Edit folders") { managingFolders = true }
                         Button(state.isOrganizingFolders ? "Organizing…" : "Organize Unfiled Meetings") { Task { await state.organizeUnfiledMeetings() } }
