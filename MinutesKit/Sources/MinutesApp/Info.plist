@@ -28,7 +28,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>55</string>
+	<string>57</string>
 	<key>GoogleDesktopClientID</key>
 	<string>618880165655-s4ct030bbuqbti3cqlkt6jsdtqf77lve.apps.googleusercontent.com</string>
 	<key>GoogleIOSClientID</key>
@@ -47,5 +47,18 @@
 	<string>Minutes requires microphone access to record meetings for local transcription and diarization.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Minutes uses Apple Speech for on-device meeting transcription. Unsupported local recognition fails without sending audio to a server.</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Minutes meeting references</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.minutes.meeting-identifiers</string>
+		</dict>
+	</array>
 </dict>
 </plist>

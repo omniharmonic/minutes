@@ -3,6 +3,7 @@ import Foundation
 import Combine
 import EventKit
 import UserNotifications
+import AVFoundation
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -68,13 +69,23 @@ public final class AppState: ObservableObject {
         case microphone = "Microphone", systemAudio = "Mac audio only", systemAndMicrophone = "Mac call audio + microphone"
         public var includesMicrophone: Bool { self != .systemAudio }
         public var id: String { rawValue }
+        // Case names, not display text, so relabeling never resets a saved choice.
+        var storageID: String { String(describing: self) }
+        init?(storageID: String) {
+            guard let mode = Self.allCases.first(where: { $0.storageID == storageID }) else { return nil }
+            self = mode
+        }
     }
-    @Published public var captureMode: CaptureMode = .microphone
+    /// Applies to manual starts and calendar-suggested starts alike.
+    @Published public var captureMode: CaptureMode = .microphone {
+        didSet { preferences.set(captureMode.storageID, forKey: "captureMode") }
+    }
     @Published public var isStartingRecording = false
     @Published public var isFinalizingRecording = false
     @Published public var captureSourceDirectory: URL?
     private var recordingUsesSystem = false
     #if os(macOS)
+    var systemCapturePreflight: () -> Bool = { CGPreflightScreenCaptureAccess() }
     private var systemRecorder: any SystemAudioRecording = SystemAudioCaptureService()
     #endif
     @Published public var isRecording: Bool = false
@@ -193,6 +204,7 @@ public final class AppState: ObservableObject {
         calendarProvider: (any CalendarProviding)? = nil,
         audioDirectory: URL? = nil,
         preferences: UserDefaults = .standard,
+        defaultCaptureMode: CaptureMode = .microphone,
         prismConnection: PrismConnection? = nil,
         recordingModelReadiness: @escaping @Sendable () -> (ready: Bool, reason: String) = { ModelManager.shared.diarizationReadiness() },
         recordingEnvironmentPreflight: (@Sendable () async throws -> Void)? = nil,
@@ -217,6 +229,7 @@ public final class AppState: ObservableObject {
         self.recordingEnvironmentPreflight = recordingEnvironmentPreflight
         self.preferences = preferences
         self._autoFileMeetingsEnabled = Published(initialValue: preferences.object(forKey: "autoFileMeetingsEnabled") as? Bool ?? true)
+        self._captureMode = Published(initialValue: preferences.string(forKey: "captureMode").flatMap(CaptureMode.init(storageID:)) ?? defaultCaptureMode)
         self.calendarProvider = calendarProvider ?? EventKitCalendarProvider()
         self.audioDirectory = audioDirectory
         self.captureStart = captureStart
@@ -255,9 +268,10 @@ public final class AppState: ObservableObject {
 
     #if os(macOS)
     public convenience init(store: MinutesStore, audioDirectory: URL, systemRecorder: any SystemAudioRecording,
+        preferences: UserDefaults = .standard,
         recordingModelReadiness: @escaping @Sendable () -> (ready: Bool, reason: String) = { ModelManager.shared.diarizationReadiness() },
         processAudio: @escaping @Sendable (String, URL, DiarizationConfig) async throws -> PipelineResult = { try await PipelineOrchestrator().process(meetingId: $0, audioURL: $1, config: $2) }) throws {
-        try self.init(store: store, audioDirectory: audioDirectory, recordingModelReadiness: recordingModelReadiness, processAudio: processAudio)
+        try self.init(store: store, audioDirectory: audioDirectory, preferences: preferences, recordingModelReadiness: recordingModelReadiness, processAudio: processAudio)
         self.systemRecorder = systemRecorder
     }
 
@@ -577,6 +591,31 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// Calendar events a saved recording could belong to, for linking it afterwards.
+    public func calendarEventsOverlapping(_ meeting: Meeting) async -> [CalendarMeetingEvent] {
+        let end = meeting.endedAt ?? meeting.startedAt
+        let interval = DateInterval(start: meeting.startedAt.addingTimeInterval(-3_600), end: max(end, meeting.startedAt) + 3_600)
+        do {
+            let events: [CalendarMeetingEvent]
+            if calendarSource == .google, let connection = googleConnection { events = try await connection.events(in: interval) }
+            else if calendarConnected { events = try calendarProvider.events(in: interval) }
+            else { return [] }
+            return CalendarMeetingEvent.overlapping(events, start: meeting.startedAt, end: end)
+        } catch {
+            statusMessage = "Could not read calendar events: \(error.localizedDescription)"
+            return []
+        }
+    }
+
+    public func linkCalendarEvent(_ event: CalendarMeetingEvent, toMeeting id: String) {
+        do {
+            let bound = try CalendarMeetingBinder.bind(meetingId: id, event: event, store: store)
+            if let index = meetings.firstIndex(where: { $0.id == id }) { meetings[index] = bound }
+            if currentMeeting?.id == id { selectMeeting(id: id) }
+            statusMessage = "Linked to \(event.title). Invitees are now suggested when you review speakers."
+        } catch { statusMessage = "Could not link the calendar event: \(error.localizedDescription)" }
+    }
+
     public func dismissCalendarPrompt(eventID: String) {
         dismissedCalendarEvents.insert(eventID)
         calendarPrompt = nil
@@ -633,12 +672,20 @@ public final class AppState: ObservableObject {
     
     public func startQuickMeeting(event: CalendarMeetingEvent? = nil) {
         guard requireRecordingModels() else { return }
+        // Restarting from Record (for example after switching to call audio)
+        // must keep the meeting's invitees; only an unambiguous event is used.
+        let event = event ?? CalendarMeetingEvent.inProgress(in: upcomingEvents, now: Date())
         #if os(macOS)
-        if captureMode != .microphone {
+        var fallbackNotice: String?
+        if captureMode == .systemAndMicrophone && !systemCapturePreflight() {
+            // A suggested meeting must still be captured; say plainly what is missing.
+            fallbackNotice = "Call audio is not allowed yet, so only your microphone is recording. Allow Minutes in System Settings > Privacy & Security > Screen & System Audio Recording."
+        } else if captureMode != .microphone {
             let includeMicrophone = captureMode.includesMicrophone
             Task { await startSystemMeeting(event: event, includeMicrophone: includeMicrophone) }
             return
         }
+        defer { if let fallbackNotice, isRecording { statusMessage = fallbackNotice } }
         #endif
         guard !isStartingRecording, !isFinalizingRecording else { return }
         recordingUsesSystem = false
@@ -743,12 +790,12 @@ public final class AppState: ObservableObject {
             audioURL = recordedURL
             #endif
             // A header-only or corrupt file cannot be reported as a successful recording.
-            let decoded = try AudioDecoder.decode(fileURL: audioURL, targetSampleRate: 16000)
-            guard !decoded.samples.isEmpty else { throw ASRError.audioUnreadable("Recording contains no audio frames") }
+            // Read the header off the main actor: decoding a long meeting here froze the UI.
+            let duration = try await Self.finalizedAudioDuration(audioURL)
             // The finalized file is authoritative; the last live poll can trail
             // Stop by one timer interval (and system capture uses a wall clock).
-            recordingMeter.finish(duration: decoded.duration)
-            if recordingDuration != decoded.duration { recordingDuration = decoded.duration }
+            recordingMeter.finish(duration: duration)
+            if recordingDuration != duration { recordingDuration = duration }
         } catch {
             if var meeting = store.getMeeting(id: mId) {
                 meeting.status = "failed"
@@ -777,6 +824,7 @@ public final class AppState: ObservableObject {
                 let result = try await processAudio(mId, audioURL, diarizationConfig)
                 _ = try persistProcessingState(meetingId: mId, status: "needs_review", result: result)
                 await completeRecordedMeeting(meetingID: mId, placeholderTitle: placeholderTitle)
+                appendCoverageNotice(result)
                 await automaticallyFileMeeting(id: mId)
             } catch {
                 statusMessage = "Audio preserved; processing failed: \(error.localizedDescription)"
@@ -792,6 +840,22 @@ public final class AppState: ObservableObject {
         let selection = selectedMeetingId
         loadInitialData()
         selectMeeting(id: selection.flatMap { store.getMeeting(id: $0) != nil ? $0 : nil } ?? mId)
+    }
+
+    private func appendCoverageNotice(_ result: PipelineResult) {
+        guard let notice = result.coverageNotice else { return }
+        // Leading, so the persistent status card shows it rather than the auto-dismissing toast.
+        statusMessage = statusMessage == "Ready" ? notice : notice + " " + statusMessage
+    }
+
+    nonisolated static func finalizedAudioDuration(_ url: URL) async throws -> Double {
+        try await Task.detached(priority: .userInitiated) {
+            let file = try AVAudioFile(forReading: url)
+            guard file.length > 0, file.processingFormat.sampleRate > 0 else {
+                throw ASRError.audioUnreadable("Recording contains no audio frames")
+            }
+            return Double(file.length) / file.processingFormat.sampleRate
+        }.value
     }
 
     /// Complete the captured meeting, independent of whichever meeting is open now.
@@ -869,6 +933,7 @@ public final class AppState: ObservableObject {
                 let result = try await processAudio(meeting.id, URL(fileURLWithPath: path), diarizationConfig)
                 meeting = try persistProcessingState(meetingId: meeting.id, status: "needs_review", result: result)
                 await completeRecordedMeeting(meetingID: meeting.id, placeholderTitle: nil)
+                appendCoverageNotice(result)
             } catch {
                 statusMessage = "Audio saved locally; processing pending: \(error.localizedDescription)"
                 do { meeting = try persistProcessingState(meetingId: meeting.id, status: "recorded") }
@@ -904,6 +969,7 @@ public final class AppState: ObservableObject {
             let result = try await processAudio(meeting.id, recoveredCopy ?? URL(fileURLWithPath: path), diarizationConfig)
             _ = try persistProcessingState(meetingId: meeting.id, status: "needs_review", result: result)
             await completeRecordedMeeting(meetingID: meeting.id, placeholderTitle: nil)
+            appendCoverageNotice(result)
             await automaticallyFileMeeting(id: meeting.id)
         } catch {
             statusMessage = "Audio preserved; processing pending: \(error.localizedDescription)"

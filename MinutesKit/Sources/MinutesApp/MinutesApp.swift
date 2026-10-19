@@ -24,9 +24,11 @@ public final class AppStartup: ObservableObject {
                     preferences.set(libraryDirectory.appendingPathComponent("exports", isDirectory: true).path, forKey: "markdownDirectory")
                 }
                 state = try AppState(databasePath: databasePath ?? libraryDirectory.appendingPathComponent("minutes.sqlite").path,
-                    audioDirectory: libraryDirectory.appendingPathComponent("audio", isDirectory: true), preferences: preferences)
+                    audioDirectory: libraryDirectory.appendingPathComponent("audio", isDirectory: true), preferences: preferences,
+                    defaultCaptureMode: .systemAndMicrophone)
             } else {
-                state = try AppState(databasePath: databasePath)
+                // Online meetings need the other participants' audio; mic-only is opt-in.
+                state = try AppState(databasePath: databasePath, defaultCaptureMode: .systemAndMicrophone)
             }
             errorMessage = nil
         } catch {

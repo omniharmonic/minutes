@@ -79,6 +79,22 @@ public struct CalendarMeetingEvent: Codable, Sendable, Equatable, Identifiable {
             .sorted { $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start }
     }
 
+    /// The meeting a recording started without a calendar choice most likely
+    /// belongs to: the only invited event in progress (or starting within five
+    /// minutes). Overlapping events are ambiguous and return nil.
+    public static func inProgress(in events: [Self], now: Date) -> Self? {
+        let candidates = scoped(events, interval: DateInterval(start: now, duration: 301))
+            .filter { $0.start.addingTimeInterval(-300) <= now && $0.end > now && !$0.attendees.isEmpty }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    /// Events a finished recording could belong to, longest overlap first.
+    public static func overlapping(_ events: [Self], start: Date, end: Date) -> [Self] {
+        let interval = DateInterval(start: start.addingTimeInterval(-900), end: max(end, start) + 900)
+        func overlap(_ event: Self) -> TimeInterval { min(event.end, max(end, start)).timeIntervalSince(max(event.start, start)) }
+        return scoped(events, interval: interval).sorted { overlap($0) > overlap($1) }
+    }
+
     public static func nextPrompt(in events: [Self], now: Date, suppressedIDs: Set<String>) -> Self? {
         scoped(events, interval: DateInterval(start: now.addingTimeInterval(-120), duration: 240))
             .first { abs($0.start.timeIntervalSince(now)) <= 120 && $0.end > now && !suppressedIDs.contains($0.id) }

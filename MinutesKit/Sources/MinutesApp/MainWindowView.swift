@@ -646,13 +646,18 @@ public struct MainWindowView: View {
                     }.buttonStyle(.plain).accessibilityLabel("Dismiss message").help("Dismiss message")
                 }
             }
+            // Bounded on purpose: this card sits in a bottom safe-area inset, so an
+            // unbounded message height raised the window's minimum size past the
+            // screen and pushed the toolbar off the top ("zoomed" window).
             Text(statusSummary).font(.callout).foregroundStyle(.secondary)
-                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled).lineLimit(1...5).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help(statusSummary)
             if appState.isSettingUpSpeechModels && appState.statusMessage != "Ready"
                 && appState.statusMessage != statusSummary {
                 Text(appState.statusMessage).font(.caption).foregroundStyle(.secondary)
-                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled).lineLimit(1...3).truncationMode(.tail)
+                    .help(appState.statusMessage)
             }
         }
         .padding(16)
@@ -667,6 +672,10 @@ public struct MainWindowView: View {
     @ViewBuilder private func meetingContent(_ meeting: Meeting) -> some View {
         switch meetingTab {
         case .notes:
+            if meeting.calendarEventId == nil && meeting.platform != "transcript_import" && !recordingBusy {
+                CalendarLinkButton(load: { await appState.calendarEventsOverlapping(meeting) },
+                                   link: { appState.linkCalendarEvent($0, toMeeting: meeting.id) })
+            }
             NotesView(meeting: meeting, summary: appState.currentSummary, utterances: appState.currentUtterances,
                       attendees: appState.currentAttendees, bookmarks: appState.currentBookmarks,
                 onSaveNotes: { text in perform("save notes") { var m = appState.store.getMeeting(id: meeting.id) ?? meeting; m.userNotes = text; try appState.store.saveMeeting(m); appState.selectMeeting(id: m.id); if let index = appState.meetings.firstIndex(where: { $0.id == m.id }) { appState.meetings[index] = m } } },

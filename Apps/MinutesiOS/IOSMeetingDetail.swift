@@ -51,6 +51,10 @@ struct IOSMeetingDetail: View {
                                 do { try state.moveMeeting(meetingID, to: folderID) } catch { moveError = error.localizedDescription }
                             }
                         } label: { Label(state.folderName(for: meetingID), systemImage: "folder").font(.subheadline).foregroundStyle(.secondary) }
+                        if meeting.calendarEventId == nil && meeting.platform != "transcript_import" && !state.isRecording && !state.isProcessing {
+                            CalendarLinkButton(load: { await state.calendarEventsOverlapping(meeting) },
+                                               link: { state.linkCalendarEvent($0, toMeeting: meetingID) })
+                        }
                         NotesView(meeting: meeting, summary: state.currentSummary, utterances: state.currentUtterances, attendees: state.currentAttendees, bookmarks: state.currentBookmarks,
                             onSaveNotes: { text in save { guard var latest = state.store.getMeeting(id: meetingID) else { return }; latest.userNotes = text; try state.store.saveMeeting(latest); state.selectMeeting(id: meetingID) } },
                             onSaveBookmark: { bookmark in save { try state.store.saveBookmark(bookmark); state.currentBookmarks = state.store.listBookmarks(meetingId: meetingID) } },

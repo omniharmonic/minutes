@@ -38,7 +38,9 @@ import MinutesSpeech
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("minutes-system-only-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let recorder = SystemRecorderFixture()
+        // Capture mode persists; never write it into the shared test-runner defaults.
         let state = try AppState(store: MinutesStore(dbPath: ":memory:"), audioDirectory: root, systemRecorder: recorder,
+            preferences: try #require(UserDefaults(suiteName: "minutes-system-only-\(UUID())")),
             recordingModelReadiness: { (true, "Fixture models ready") },
             processAudio: { id, _, _ in PipelineResult(meetingId: id, audioDuration: 0.1, sampleRate: 16000,
                 words: [], segments: [], clusters: [], utterances: [], speechDuration: 0) })
