@@ -75,7 +75,10 @@ public struct FoundationModelsProvider: LLMProvider {
                     return "- " + text + " " + references
                 }
                 let claims: [NativeSummaryClaim]
-                if prompt.utf8.count <= 1_400 {
+                // Reductions must contract: the six-claim schema let each pass
+                // return nearly as many bullets as it received, so a 37-minute
+                // call never converged. Draft-fact prompts get the 1...3 schema.
+                if prompt.utf8.count <= 1_400 || prompt.contains(#""kind":"draft_summary""#) {
                     let response = try await session.respond(to: prompt, generating: NativeCompactSummaryDraft.self,
                         options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 512))
                     claims = response.content.claims
@@ -100,6 +103,7 @@ public struct FoundationModelsProvider: LLMProvider {
             } catch is CancellationError { throw CancellationError() }
             catch let error as LanguageModelSession.GenerationError {
                 try Task.checkCancellation()
+                Logger(subsystem: "app.minutes", category: "LocalSummary").error("Generation error \(String(describing: error).prefix(while: { $0 != "(" }), privacy: .public) promptBytes=\(prompt.utf8.count, privacy: .public)")
                 switch error {
                 case .exceededContextWindowSize: throw LocalSummaryProviderError.contextLimit
                 case .assetsUnavailable: throw LocalSummaryProviderError.unavailable(.modelNotReady)
@@ -128,7 +132,9 @@ public struct FoundationModelsProvider: LLMProvider {
 enum SummaryQuestionEvidence {
     struct Excerpt { let id: String; let text: String; let additionalIDs: [String]; var evidenceIDs: [String] { [id] + additionalIDs } }
     static func unansweredExcerpts(prompt: String) -> [Excerpt] {
-        let pattern = #"\b(?:we|i|they|the team)\s+(?:still\s+)?(?:need to (?:know|determine|find out|understand)|don[’']t know|do not know)\b|\b(?:unanswered|open) question\b|\b(?:unclear|unknown) whether\b|\bstill (?:unclear|unknown)\b"#
+        // Conversational "I don't know who you are" is not an open issue, and
+        // Apple Speech emits run-on sentences; neither may become a quoted bullet.
+        let pattern = #"\b(?:we|i|they|the team)\s+(?:still\s+)?need to (?:know|determine|find out|understand)\b|\b(?:we|they|the team)\s+(?:still\s+)?(?:don[’']t|do not) know (?:whether|if)\b|\b(?:unanswered|open) question\b|\b(?:unclear|unknown) whether\b|\bstill (?:unclear|unknown)\b"#
         return prompt.components(separatedBy: .newlines).flatMap { line -> [Excerpt] in
             guard let data = line.data(using: .utf8),
                   let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
@@ -138,6 +144,7 @@ enum SummaryQuestionEvidence {
             text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: .bySentences) { sentence, _, _, _ in
                 guard let sentence, sentence.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil else { return }
                 let quote = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard quote.count <= 240 else { return }
                 if supports(excerpt: quote, ids: [id], prompt: prompt) { excerpts.append(Excerpt(id: id, text: quote, additionalIDs: (record["additionalIDs"] ?? "").split(separator: " ").map(String.init))) }
             }
             return excerpts

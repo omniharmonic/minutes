@@ -1,5 +1,6 @@
 import Foundation
 import MinutesCore
+import os
 
 public protocol LLMProvider: Sendable {
     var id: String { get }
@@ -29,6 +30,7 @@ public final class LocalHeuristicProvider: LLMProvider {
 }
 
 public final class Summarizer: Sendable {
+    static let logger = Logger(subsystem: "app.minutes", category: "Summary")
     private let provider: (any LLMProvider)?
     
     public init(provider: (any LLMProvider)? = nil) {
@@ -63,6 +65,7 @@ public final class Summarizer: Sendable {
         let highlights = Self.highlights(utterances)
         let fallbackOverview = highlights.isEmpty ? "No transcript is available." : highlights.map(\.text).joined(separator: " ")
         var generatedMarkdown: String?
+        var missedChunks = 0, totalChunks = 0
         let evidence = SummaryEvidence.records(meeting: meeting, utterances: utterances)
         if let provider, !evidence.isEmpty, !insufficient {
             let brief = utterances.reduce(0) { $0 + $1.text.split(whereSeparator: \.isWhitespace).count } <= 40 && meeting.userNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
@@ -72,27 +75,51 @@ public final class Summarizer: Sendable {
             """
             let prompts = try await SummaryEvidence.fittingPrompts(records: evidence, title: title, template: template,
                 instructions: instructions, provider: provider)
+            Self.logger.info("Summarizing \(evidence.count, privacy: .public) records in \(prompts.count, privacy: .public) chunks")
+            // One declined chunk must not discard every other validated chunk;
+            // the gap is disclosed in the notes instead.
             var parts: [String] = []
-            for prompt in prompts { parts.append(try await Self.generateValidated(provider: provider, instructions: instructions, prompt: prompt)) }
+            var lastMiss: (any Error)?
+            for prompt in prompts {
+                do { parts.append(try await Self.generateValidated(provider: provider, instructions: instructions, prompt: prompt)) }
+                catch where Self.isChunkLevelMiss(error) { lastMiss = error; missedChunks += 1 }
+            }
+            if let lastMiss, parts.count * 2 < prompts.count { throw lastMiss }
+            if missedChunks > 0 { Self.logger.info("Skipped \(missedChunks, privacy: .public) of \(prompts.count, privacy: .public) declined chunks") }
+            totalChunks = prompts.count
             if prompts.count > 1 {
                 var drafts = try SummaryEvidence.draftRecords(parts)
                 let reduction = """
                 Write a coherent whole-meeting brief from intermediate draft facts in chronological order. Use at most three short bullets and fewer words than the input facts, combining related facts without losing concrete outcomes. \(template.guidance) Merge related points and remove repetition. Preserve concrete decisions, reasons, explicit follow-ups and unresolved issues, including changed plans and negation. Never invent owners, commitments, or dates. Every bullet must cite its original supplied source IDs (id/additionalIDs). N IDs remain untimed personal context. No generic 'participants discussed' filler or metadata. These are intermediate notes, not new transcript quotations.
                 """
+                // Each completed level covers the whole meeting with checked
+                // citations; if reduction stops early, the latest is the shortest.
+                var latestLevel: [String]?
+                var converged = false
                 for _ in 0..<6 {
                     let reductions = try await SummaryEvidence.fittingPrompts(records: drafts, title: title, template: template,
                         instructions: reduction, provider: provider)
+                    Self.logger.info("Reducing \(drafts.count, privacy: .public) draft records in \(reductions.count, privacy: .public) chunks")
                     var combined: [String] = []
-                    for prompt in reductions { combined.append(try await Self.generateValidated(provider: provider, instructions: reduction, prompt: prompt)) }
-                    if reductions.count == 1 { parts = combined; break }
+                    for prompt in reductions {
+                        do { combined.append(try await Self.generateValidated(provider: provider, instructions: reduction, prompt: prompt)) }
+                        catch where Self.isChunkLevelMiss(error) {
+                            // These inputs already passed citation checks; carry
+                            // them forward unreduced so the level stays complete.
+                            Self.logger.info("Reduction chunk declined; carrying its notes forward")
+                            combined.append(SummaryEvidence.passThrough(prompt: prompt))
+                        }
+                    }
+                    if reductions.count == 1 { parts = combined; converged = true; break }
                     let next = try SummaryEvidence.draftRecords(combined)
-                    // A model need not shrink each pass. The first-pass notes
-                    // already cover every source chunk and passed citation checks.
-                    // Keep those complete notes instead of discarding valid work
-                    // or truncating the middle of the meeting to force a fit.
+                    // A model need not shrink each pass. Earlier levels already
+                    // cover every source chunk and passed citation checks; keep
+                    // them instead of truncating the middle of the meeting.
                     guard next.reduce(0, { $0 + $1.text.utf8.count }) < drafts.reduce(0, { $0 + $1.text.utf8.count }) else { break }
                     drafts = next
+                    latestLevel = combined
                 }
+                if !converged, let latestLevel { parts = latestLevel }
             }
             generatedMarkdown = Self.conciseDraft(parts)
         }
@@ -107,7 +134,11 @@ public final class Summarizer: Sendable {
         if let generatedMarkdown {
             md += "\n## Generated notes (review required)\n"
             let origin = provider?.isLocal == true ? "On-device AI draft" : "AI draft"
-            md += "*\(origin) · \(template.title)*\n\n\(generatedMarkdown)\n\n"
+            md += "*\(origin) · \(template.title)*\n\n"
+            if missedChunks > 0 {
+                md += "*\(missedChunks) of \(totalChunks) transcript sections could not be summarized by the model and are not reflected here. The full transcript is preserved.*\n\n"
+            }
+            md += "\(generatedMarkdown)\n\n"
         } else {
             if insufficient {
                 md += "\n## Not enough conversation to summarize\nOnly a self-introduction or greeting was recorded. No AI summary was generated.\n\n"
@@ -197,6 +228,16 @@ public final class Summarizer: Sendable {
         guard candidates.count > 6 else { return candidates }
         // Cover the conversation rather than reproducing only its introduction.
         return (0..<6).map { candidates[Int((Double($0) * Double(candidates.count - 1) / 5).rounded())] }
+    }
+
+    /// Failures confined to one chunk's content. Availability, cancellation and
+    /// busy errors still fail the whole summary so the user can retry.
+    static func isChunkLevelMiss(_ error: any Error) -> Bool {
+        switch error {
+        case LocalSummaryProviderError.contentDeclined, LocalSummaryProviderError.invalidResponse,
+             LocalSummaryProviderError.contextLimit, SummaryError.unsupportedEvidenceReference, SummaryError.emptyProviderResponse: true
+        default: false
+        }
     }
 
     private static func conciseDraft(_ parts: [String]) -> String {

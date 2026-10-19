@@ -68,6 +68,10 @@ struct SummarySynthesisTests {
         #expect(SummaryQuestionEvidence.unansweredExcerpts(prompt: draft).first?.evidenceIDs == ["T0001", "T0003", "T0004"])
         #expect(SummaryQuestionEvidence.unansweredExcerpts(prompt: #"{"id":"T0001","kind":"transcript","text":"Nobody has committed to an earlier launch. The decision is not approved."}"#).isEmpty)
         #expect(SummaryQuestionEvidence.unansweredExcerpts(prompt: #"{"id":"N0001","kind":"user_notes","text":"We still need to know whether the bank supports refunds."}"#).isEmpty)
+        // Conversation from a real call: casual uncertainty and run-on recognizer sentences are not open issues.
+        #expect(SummaryQuestionEvidence.unansweredExcerpts(prompt: #"{"id":"T0001","kind":"transcript","text":"And I was like I don't know who you are she was like our kids go to the same daycare."}"#).isEmpty)
+        let runOn = "We still need to know whether " + String(repeating: "the city will match the funds and ", count: 10) + "who handles payments."
+        #expect(SummaryQuestionEvidence.unansweredExcerpts(prompt: #"{"id":"T0001","kind":"transcript","text":""# + runOn + #""}"#).isEmpty)
     }
     private func discussion() -> [Utterance] {
         (0..<20).map { index in
@@ -100,10 +104,15 @@ struct SummarySynthesisTests {
     }
     @Test("Synthesis cannot introduce references absent from its input facts")
     func validatesReductionEvidence() async throws {
+        // A rejected reduction is not condensed; its already-validated input
+        // notes carry forward, so no invented reference reaches the summary.
         let provider = SynthesisFixtureProvider(corruptReduction: true)
-        await #expect(throws: SummaryError.self) {
-            try await Summarizer(provider: provider).summarize(meeting: Meeting(id: "synthesis", title: "Release readiness"), utterances: discussion(), attendees: [])
-        }
+        let summary = try await Summarizer(provider: provider).summarize(meeting: Meeting(id: "synthesis", title: "Release readiness"), utterances: discussion(), attendees: [])
+        let supplied = Set((1...20).map { String(format: "T%04d", $0) })
+        let cited = summary.overview.matches(of: /\[([TN][0-9]{4,})\]/).map { String($0.1) }
+        #expect(!cited.isEmpty)
+        #expect(Set(cited).isSubset(of: supplied))
+        #expect(summary.overview.contains("CANCELLED_RELEASE"))
     }
     @Test("Negated decisions and actions never become affirmative structured outcomes")
     func negativeIntentDoesNotBecomeCommitment() async throws {

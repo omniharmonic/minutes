@@ -70,6 +70,18 @@ struct SummaryEvidence: Encodable {
         }).sorted()
     }
 
+    /// The draft notes a reduction prompt carried, as cited bullets, for a
+    /// chunk the model declined to condense.
+    static func passThrough(prompt: String) -> String {
+        prompt.components(separatedBy: "\n").compactMap { line -> String? in
+            guard let data = line.data(using: .utf8),
+                  let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+                  record["kind"] == "draft_summary", let id = record["id"], let text = record["text"] else { return nil }
+            let ids = [id] + (record["additionalIDs"] ?? "").split(separator: " ").map(String.init)
+            return "- " + text + " " + ids.map { "[" + $0 + "]" }.joined(separator: " ")
+        }.joined(separator: "\n")
+    }
+
     static func draftRecords(_ outputs: [String]) throws -> [Self] {
         let expression = try NSRegularExpression(pattern: #"\[([TN][0-9]{4,})\]"#)
         var records: [Self] = []
