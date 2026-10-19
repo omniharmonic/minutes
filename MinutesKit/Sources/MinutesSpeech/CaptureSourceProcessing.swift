@@ -30,7 +30,7 @@ enum CaptureSourceProcessing {
         }
     }
 
-    static func merge(meetingID: String, results: [(String, PipelineResult)]) -> PipelineResult {
+    static func merge(meetingID: String, results: [(String, PipelineResult)], skippedSources: [String] = []) -> PipelineResult {
         var clusters: [SpeakerCluster] = [], segments: [TimedSpeakerSegment] = [], utterances: [Utterance] = []
         var sourceByCluster: [String: String] = [:]
         for (source, result) in results {
@@ -72,7 +72,9 @@ enum CaptureSourceProcessing {
         return PipelineResult(meetingId: meetingID, audioDuration: results.map { $0.1.audioDuration }.max() ?? 0,
             sampleRate: 16000, words: results.flatMap { $0.1.words }.sorted { $0.start < $1.start },
             segments: segments.sorted { $0.start < $1.start }, clusters: clusters, utterances: ordered,
-            speechDuration: results.reduce(0) { $0 + $1.1.speechDuration })
+            speechDuration: results.reduce(0) { $0 + $1.1.speechDuration },
+            uncoveredSpeechSeconds: results.reduce(0) { $0 + $1.1.uncoveredSpeechSeconds },
+            skippedSources: skippedSources)
     }
 
     private static func normalizedWords(_ text: String) -> [String] {

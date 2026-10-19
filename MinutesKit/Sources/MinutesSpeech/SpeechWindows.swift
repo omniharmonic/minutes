@@ -38,9 +38,30 @@ enum SpeechWindows {
         return windows
     }
 
+    struct Transcription: Sendable {
+        let words: [ASRWord]
+        let detectedSeconds: Double
+        let uncoveredSeconds: Double
+    }
+
+    /// Decide whether a transcript that missed some detected sound is still worth
+    /// saving. Diarization routinely marks laughter, typing, music and crosstalk
+    /// as speech, and Apple's recognizer answers those with "no speech". Failing
+    /// the whole meeting for that discarded real 30+ minute transcripts.
+    static func acceptsPartialTranscript(detectedSeconds: Double, uncoveredSeconds: Double, wordCount: Int) -> Bool {
+        guard wordCount > 0 else { return false }
+        guard detectedSeconds > 0 else { return true }
+        return uncoveredSeconds / detectedSeconds <= 0.5
+    }
+
     static func transcribe(audio: DecodedAudio, segments: [TimedSpeakerSegment], backend: any SpeechTranscriptionBackend, fallbackTranscriptURL: URL?) async throws -> [ASRWord] {
+        try await transcribeWithCoverage(audio: audio, segments: segments, backend: backend, fallbackTranscriptURL: fallbackTranscriptURL).words
+    }
+
+    static func transcribeWithCoverage(audio: DecodedAudio, segments: [TimedSpeakerSegment], backend: any SpeechTranscriptionBackend, fallbackTranscriptURL: URL?) async throws -> Transcription {
         let windows = plan(segments: segments, duration: audio.duration)
-        guard !windows.isEmpty else { return [] }
+        guard !windows.isEmpty else { return Transcription(words: [], detectedSeconds: 0, uncoveredSeconds: 0) }
+        PipelineOrchestrator.logger.info("Recognizing \(windows.count, privacy: .public) speech windows")
         let primary = try await transcribePlannedWindows(audio: audio, windows: windows, backend: backend, fallbackTranscriptURL: fallbackTranscriptURL)
         let spans = detectedSpans(segments, duration: audio.duration)
         var result = primary
@@ -61,6 +82,7 @@ enum SpeechWindows {
                 }
             }
             retryCount += retries.count
+            if !retries.isEmpty { PipelineOrchestrator.logger.info("Retrying \(retries.count, privacy: .public) shorter \(Int(length), privacy: .public)s windows") }
             let recovered = try await transcribePlannedWindows(audio: audio, windows: retries, backend: backend,
                 fallbackTranscriptURL: fallbackTranscriptURL, phase: "retry-\(Int(length))")
             for word in recovered {
@@ -74,10 +96,13 @@ enum SpeechWindows {
         let uncovered = unresolvedIntervals(spans: spans, words: result, minimumGap: 3)
         reportDiagnostics(["phase": "coverage", "primaryWords": primary.count, "retryWindows": retryCount,
             "addedWords": result.count - primary.count, "uncoveredSpans": uncovered.count])
-        guard uncovered.isEmpty else {
-            throw ASRError.transcriptionFailed("Some detected speech could not be transcribed after shorter retries. The complete audio is preserved. Try processing again; this attempt is incomplete.")
+        let detectedSeconds = spans.reduce(0) { $0 + ($1.end - $1.start) }
+        let uncoveredSeconds = uncovered.reduce(0) { $0 + ($1.end - $1.start) }
+        guard acceptsPartialTranscript(detectedSeconds: detectedSeconds, uncoveredSeconds: uncoveredSeconds, wordCount: result.count) else {
+            throw TranscriptCoverageError("Most detected speech could not be transcribed after shorter retries. The complete audio is preserved. Try processing again; this attempt is incomplete.")
         }
-        return result.sorted { $0.start < $1.start }
+        return Transcription(words: result.sorted { $0.start < $1.start },
+            detectedSeconds: detectedSeconds, uncoveredSeconds: uncoveredSeconds)
     }
 
     private static func detectedSpans(_ segments: [TimedSpeakerSegment], duration: Double) -> [TimedSpeakerSegment] {
@@ -134,10 +159,10 @@ enum SpeechWindows {
             let recognized: [ASRWord]
             do {
                 recognized = try await backend.transcribe(audioURL: url, fallbackTranscriptURL: fallbackTranscriptURL)
-            } catch ASRError.noSpeechDetected {
-                // One window can contain non-speech or be rejected by the local
-                // recognizer. Continue other windows and the bounded short retry;
-                // the existing coverage guards still reject missing substantial speech.
+            } catch let error as ASRError where error.isWindowLevelMiss {
+                // One window can contain non-speech, be rejected by the local
+                // recognizer or time out. Continue other windows and the bounded
+                // short retry; the coverage policy still rejects mostly-missing speech.
                 recognized = []
                 reportDiagnostics(["phase": phase, "window": index, "start": window.start,
                     "end": window.end, "noSpeechResponse": 1])

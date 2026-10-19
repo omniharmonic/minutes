@@ -122,9 +122,16 @@ struct NoSpeechWindowTests {
         let audio = DecodedAudio(samples: [Float](repeating: 0.1, count: 16_000 * 10), sampleRate: 16_000, duration: 10)
         for noSpeech in [false, true] {
             let backend = RecognitionFailureFixture(noSpeech: noSpeech)
-            await #expect(throws: ASRError.self) {
+            await #expect(throws: (any Error).self) {
                 try await SpeechWindows.transcribe(audio: audio,
                     segments: [.init(speakerId: "speech", start: 1, end: 9)], backend: backend, fallbackTranscriptURL: nil)
+            }
+            // No words at all is a coverage failure; a hard recognizer error stays an ASRError.
+            do {
+                _ = try await SpeechWindows.transcribe(audio: audio,
+                    segments: [.init(speakerId: "speech", start: 1, end: 9)], backend: RecognitionFailureFixture(noSpeech: noSpeech), fallbackTranscriptURL: nil)
+            } catch {
+                #expect(noSpeech ? error is TranscriptCoverageError : error is ASRError)
             }
             let calls = await backend.calls
             #expect(noSpeech ? calls > 1 && calls <= 13 : calls == 1)

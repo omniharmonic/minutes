@@ -138,7 +138,7 @@ extension SpeechWindowTests {
     @Test func substantialDetectedSpeechThatStillHasNoWordsFailsInsteadOfClaimingCompletion() async {
         let audio = DecodedAudio(samples: [Float](repeating: 0.1, count: 8 * 16000), sampleRate: 16000, duration: 8)
         let backend = EmptySpeechFixture()
-        await #expect(throws: ASRError.self) {
+        await #expect(throws: TranscriptCoverageError.self) {
             try await SpeechWindows.transcribe(audio: audio, segments: [.init(speakerId: "first", start: 1, end: 7)], backend: backend, fallbackTranscriptURL: nil)
         }
         let calls = await backend.calls

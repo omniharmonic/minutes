@@ -5,7 +5,7 @@ public enum CaptionSilenceGate {
     public static func isQuietTail(frames: Int, lastSignal: Int, rate: Double) -> Bool {
         rate.isFinite && rate > 0 && frames >= lastSignal && Double(frames - lastSignal) / rate >= 2
     }
-    public static func containsSignal(_ samples: [Float]) -> Bool {
+    public static func containsSignal<Samples: Collection<Float>>(_ samples: Samples) -> Bool {
         samples.contains { $0.isFinite && abs($0) > 0.0001 }
     }
 }

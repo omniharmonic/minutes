@@ -33,3 +33,18 @@ struct CaptionAudioFeedTests {
         #expect(batch.chunks[0].samples == [0.25, 0.25])
     }
 }
+
+struct CaptionAudioFeedSourceBudgetTests {
+    @Test("A backlog on one source drops only that source's audio")
+    func perSourceBudget() throws {
+        let feed = CaptionAudioFeed(); feed.setEnabled(true)
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600))
+        buffer.frameLength = 1600
+        feed.offer(buffer, source: "Microphone")
+        for _ in 0..<100 { feed.offer(buffer, source: "Mac audio") }
+        let batch = feed.drain()
+        #expect(batch.droppedSources == ["Mac audio"])
+        #expect(batch.chunks.filter { $0.source == "Microphone" }.count == 1)
+    }
+}

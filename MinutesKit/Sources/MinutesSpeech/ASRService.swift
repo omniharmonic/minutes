@@ -1,5 +1,6 @@
 import Foundation
 import Speech
+import AVFoundation
 import os
 
 public enum ASRError: Error, LocalizedError {
@@ -9,6 +10,7 @@ public enum ASRError: Error, LocalizedError {
     case consentNeedsNormalAppLaunch
     case transcriptionFailed(String)
     case noSpeechDetected
+    case recognitionTimedOut
     case audioUnreadable(String)
     
     public var errorDescription: String? {
@@ -23,10 +25,22 @@ public enum ASRError: Error, LocalizedError {
             return "Speech recognition permission denied by user or system policy"
         case .noSpeechDetected:
             return "No speech was recognized in this audio window."
+        case .recognitionTimedOut:
+            return "On-device speech recognition stopped responding for this audio window."
         case .transcriptionFailed(let msg):
             return "Audio transcription failed: \(msg)"
         case .audioUnreadable(let msg):
             return "Audio unreadable: \(msg)"
+        }
+    }
+}
+
+extension ASRError {
+    /// Affects one audio window only; other windows and shorter retries continue.
+    var isWindowLevelMiss: Bool {
+        switch self {
+        case .noSpeechDetected, .recognitionTimedOut: return true
+        default: return false
         }
     }
 }
@@ -131,11 +145,22 @@ public final class ASRService: Sendable {
         try await Self.requireAuthorization { SFSpeechRecognizer.authorizationStatus() == .authorized }
 
         let state = AtomicRecognitionState()
-        
-        return try await withCheckedThrowingContinuation { continuation in
+        // Apple's local recognizer can stop calling back (for example when its XPC
+        // service is reclaimed). Without a deadline the whole meeting waits forever.
+        let deadline = Self.recognitionDeadline(audioURL: audioURL)
+        let watchdog = Task {
+            try await Task.sleep(for: .seconds(deadline))
+            state.cancel()
+            state.resumeOnce(throwing: ASRError.recognitionTimedOut)
+        }
+        defer { watchdog.cancel() }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+            state.setContinuation(continuation)
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error = error {
-                    state.resumeOnce(throwing: Self.classifyRecognitionError(error as NSError), continuation: continuation)
+                    state.resumeOnce(throwing: Self.classifyRecognitionError(error as NSError))
                     return
                 }
                 
@@ -154,11 +179,21 @@ public final class ASRService: Sendable {
                             ))
                         }
                     }
-                    state.resumeOnce(returning: words, continuation: continuation)
+                    state.resumeOnce(returning: words)
                 }
             }
-            state.setTask(task)
+            state.setTask(task, recognizer: recognizer)
+            }
+        } onCancel: {
+            state.cancel()
+            state.resumeOnce(throwing: CancellationError())
         }
+    }
+
+    /// Generous: Speech normally finishes a 20-second window in well under 5 seconds.
+    static func recognitionDeadline(audioURL: URL) -> Double {
+        let duration = (try? AVAudioFile(forReading: audioURL)).map { Double($0.length) / $0.processingFormat.sampleRate } ?? 20
+        return max(30, duration * 3)
     }
     
 }
@@ -167,11 +202,29 @@ final class AtomicRecognitionState: @unchecked Sendable {
     private let lock = NSLock()
     private var isResumed = false
     private var task: SFSpeechRecognitionTask?
-    
-    func setTask(_ t: SFSpeechRecognitionTask) {
+    // Retained for the request's lifetime; a deallocated recognizer may never call back.
+    private var recognizer: SFSpeechRecognizer?
+    private var continuation: CheckedContinuation<[ASRWord], Error>?
+    // A deadline or cancellation can fire before the continuation exists.
+    private var pendingError: Error?
+
+    func setContinuation(_ c: CheckedContinuation<[ASRWord], Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let pendingError, !isResumed {
+            isResumed = true
+            c.resume(throwing: pendingError)
+        } else {
+            continuation = c
+        }
+    }
+
+    func setTask(_ t: SFSpeechRecognitionTask, recognizer: SFSpeechRecognizer) {
         lock.lock()
         defer { lock.unlock() }
         self.task = t
+        self.recognizer = recognizer
+        if isResumed { t.cancel() }
     }
     
     func cancel() {
@@ -180,19 +233,24 @@ final class AtomicRecognitionState: @unchecked Sendable {
         task?.cancel()
     }
     
-    func resumeOnce(returning value: [ASRWord], continuation: CheckedContinuation<[ASRWord], Error>) {
+    func resumeOnce(returning value: [ASRWord]) {
         lock.lock()
         defer { lock.unlock() }
-        guard !isResumed else { return }
+        guard !isResumed, let continuation else { return }
         isResumed = true
+        self.continuation = nil
+        recognizer = nil
         continuation.resume(returning: value)
     }
     
-    func resumeOnce(throwing error: Error, continuation: CheckedContinuation<[ASRWord], Error>) {
+    func resumeOnce(throwing error: Error) {
         lock.lock()
         defer { lock.unlock() }
         guard !isResumed else { return }
+        guard let continuation else { pendingError = pendingError ?? error; return }
         isResumed = true
+        self.continuation = nil
+        recognizer = nil
         continuation.resume(throwing: error)
     }
 }

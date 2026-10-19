@@ -14,10 +14,10 @@ public final class CaptionAudioFeed: @unchecked Sendable {
     private var enabled = false
     private var generation = 0
     private var chunks: [Chunk] = []
-    private var dropped = false
+    private var droppedSources: Set<String> = []
     public init() {}
     public func setEnabled(_ value: Bool) {
-        lock.withLock { enabled = value; generation += 1; chunks.removeAll(keepingCapacity: true); dropped = false }
+        lock.withLock { enabled = value; generation += 1; chunks.removeAll(keepingCapacity: true); droppedSources.removeAll() }
     }
     public func offer(_ buffer: AVAudioPCMBuffer, source: String) {
         guard let token: Int = lock.withLock({ enabled ? generation : nil }) else { return }
@@ -32,16 +32,25 @@ public final class CaptionAudioFeed: @unchecked Sendable {
         } else { return }
         lock.withLock {
             guard enabled, generation == token else { return }
-            while !chunks.isEmpty && (chunks.count >= 24 || chunks.reduce(0.0, { $0 + Double($1.samples.count) / $1.rate }) + Double(count) / buffer.format.sampleRate > 2) {
-                chunks.removeFirst(); dropped = true
+            // Budget per source: a burst on one source must not evict the other's audio.
+            func pending() -> (count: Int, seconds: Double) {
+                chunks.reduce(into: (0, 0.0)) { total, chunk in
+                    guard chunk.source == source else { return }
+                    total.0 += 1; total.1 += Double(chunk.samples.count) / chunk.rate
+                }
+            }
+            while case let budget = pending(), budget.count > 0,
+                  budget.count >= 24 || budget.seconds + Double(count) / buffer.format.sampleRate > 2,
+                  let oldest = chunks.firstIndex(where: { $0.source == source }) {
+                chunks.remove(at: oldest); droppedSources.insert(source)
             }
             chunks.append(Chunk(samples: samples, rate: buffer.format.sampleRate, source: source))
         }
     }
-    public func drain() -> (chunks: [Chunk], dropped: Bool) {
+    public func drain() -> (chunks: [Chunk], dropped: Bool, droppedSources: Set<String>) {
         lock.withLock {
-            let result = (chunks, dropped)
-            chunks.removeAll(keepingCapacity: true); dropped = false
+            let result = (chunks, !droppedSources.isEmpty, droppedSources)
+            chunks.removeAll(keepingCapacity: true); droppedSources.removeAll()
             return result
         }
     }

@@ -59,7 +59,8 @@ import AVFoundation
         let batch = CaptionAudioFeed.shared.drain()
         if batch.dropped {
             diagnostics.droppedBatches += 1
-            resetSessions()
+            // Only the source that lost audio restarts; the other keeps its words.
+            for source in batch.droppedSources { resetSession(source: source) }
             notice?("Preview skipped some audio to catch up. The saved recording is unaffected.")
         }
         for chunk in batch.chunks {
@@ -72,23 +73,28 @@ import AVFoundation
             let maximumFrames = Int(chunk.rate * (audioWindow == nil ? 45 : 10))
             while offset < chunk.samples.count {
                 if sessions[chunk.source] == nil {
-                    guard CaptionSilenceGate.containsSignal(Array(chunk.samples[offset...])) else { break }
+                    guard CaptionSilenceGate.containsSignal(chunk.samples[offset...]) else { break }
                     createSession(source: chunk.source, rate: chunk.rate)
                 }
-                guard var session = sessions[chunk.source] else { break }
-                let count = min(chunk.samples.count - offset, maximumFrames - session.frames)
+                // Read fields only; holding a Session copy would share its samples buffer.
+                guard let frames = sessions[chunk.source]?.frames, let request = sessions[chunk.source]?.request else { break }
+                let count = min(chunk.samples.count - offset, maximumFrames - frames)
                 guard count > 0, let format = AVAudioFormat(standardFormatWithSampleRate: chunk.rate, channels: 1),
                       let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
                       let data = buffer.floatChannelData else { break }
                 buffer.frameLength = AVAudioFrameCount(count)
-                for i in 0..<count { data[0][i] = chunk.samples[offset + i] }
-                if audioWindow != nil { session.samples.append(contentsOf: chunk.samples[offset..<(offset + count)]) }
-                if CaptionSilenceGate.containsSignal(Array(chunk.samples[offset..<(offset + count)])) {
-                    session.lastSignalFrame = session.frames + count
-                }
-                session.request.append(buffer); session.frames += count; sessions[chunk.source] = session
+                let slice = chunk.samples[offset..<(offset + count)]
+                for (i, sample) in slice.enumerated() { data[0][i] = sample }
+                let hasSignal = CaptionSilenceGate.containsSignal(slice)
+                // Mutate in place: copying the session out and back duplicated its
+                // whole sample window on every 100 ms tick (copy-on-write).
+                if audioWindow != nil { sessions[chunk.source]!.samples.append(contentsOf: slice) }
+                if hasSignal { sessions[chunk.source]!.lastSignalFrame = frames + count }
+                request.append(buffer); sessions[chunk.source]!.frames += count
                 offset += count
-                if session.frames == maximumFrames { diagnostics.scheduledRotations += 1; retire(session, source: chunk.source) }
+                if frames + count == maximumFrames, let session = sessions[chunk.source] {
+                    diagnostics.scheduledRotations += 1; retire(session, source: chunk.source)
+                }
             }
         }
     }
@@ -170,9 +176,15 @@ import AVFoundation
         let token = epoch
         for (source, session) in sessions { retire(session, source: source) }
         try? await Task.sleep(for: .seconds(2))
-        guard epoch == token else { return }
-        for session in retiring.values { update?(session.id, session.text, session.source, true, session.order) }
+        if epoch == token {
+            for session in retiring.values { update?(session.id, session.text, session.source, true, session.order) }
+        }
+        // Always release recognizers and callbacks, even if a reset changed the epoch.
         stop()
+    }
+    private func resetSession(source: String) {
+        guard let session = sessions.removeValue(forKey: source) else { return }
+        session.request.endAudio(); session.task.cancel()
     }
     private func resetSessions() {
         epoch = UUID()
