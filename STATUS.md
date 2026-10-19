@@ -302,3 +302,9 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] Owner installed 57, linked the 9:33 recording to Product Tactical, regenerated and summarized: confirmed working.
 - [x] iOS build 54 (shares AppState and all MinutesKit fixes; adds the Link calendar event control to meeting detail) built, installed on the owner's iPhone and verified as version 54.
 
+
+### 2026-10-19 (later) — recording storage, generous speakers, structured notes / Mac 58, iOS 55
+- [x] Storage: transcribed recordings compact automatically to mono AAC (37-minute call: 2.1 GB → ~41 MB, <10 s); originals removed only after each encoded file verifies; Regenerate and playback read the AAC layout. Settings → Storage on Mac and iOS shows usage and offers Compress, delete audio of Recently Deleted meetings, delete audio of transcribed meetings older than N days, and per-meeting deletion. `minutes-cli audio usage|compact|delete`. Only managed library files are touched.
+- [x] Speakers: short (2–5 s) clusters unlike every main voice stay separate; reference call now 5 call + 2 mic speakers.
+- [x] Notes: overview, cited decisions and action items, and timed discussion sections for multi-chunk meetings.
+- [ ] Owner: Compress existing recordings from Settings → Storage (~4 GB today), review a regenerated long meeting's notes.
