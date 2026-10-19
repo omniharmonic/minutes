@@ -70,6 +70,16 @@ struct SummaryEvidence: Encodable {
         }).sorted()
     }
 
+    /// Raw transcript texts in a prompt, to recognise output that copies speech.
+    /// Restating an intermediate note is expected and is not a copy.
+    static func transcriptTexts(in prompt: String) -> [String] {
+        prompt.components(separatedBy: "\n").compactMap { line in
+            guard let data = line.data(using: .utf8), let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+                  record["kind"] == "transcript" else { return nil }
+            return record["text"]
+        }
+    }
+
     /// The draft notes a reduction prompt carried, as cited bullets, for a
     /// chunk the model declined to condense.
     static func passThrough(prompt: String) -> String {

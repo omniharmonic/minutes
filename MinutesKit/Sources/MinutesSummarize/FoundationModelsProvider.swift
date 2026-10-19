@@ -62,6 +62,15 @@ public struct FoundationModelsProvider: LLMProvider {
             // request prevents earlier chunks from consuming the next context.
             let session = LanguageModelSession(model: SystemLanguageModel.default, instructions: system)
             do {
+                if system.hasPrefix("Extract explicit outcomes.") {
+                    let response = try await session.respond(to: prompt, generating: NativeOutcomesDraft.self,
+                        options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 512))
+                    func line(_ kind: String, _ claim: NativeSummaryClaim) -> String {
+                        let text = claim.text.components(separatedBy: .newlines).joined(separator: " ")
+                        return "- \(kind): " + text + " " + claim.evidenceIDs.map { "[" + $0.trimmingCharacters(in: CharacterSet(charactersIn: "[] ")) + "]" }.joined(separator: " ")
+                    }
+                    return (response.content.decisions.map { line("Decision", $0) } + response.content.actionItems.map { line("Action", $0) }).joined(separator: "\n")
+                }
                 if system.contains("Summary length: brief.") {
                     let response = try await session.respond(to: prompt, generating: NativeBriefSummaryDraft.self,
                         options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 256))
@@ -205,6 +214,15 @@ private struct NativeBriefSummaryDraft {
     var supportingReason: String?
     @Guide(description: "Exact source IDs supporting the main point and supporting reason, copied from the supplied evidence. No brackets or invented IDs.", .count(1...3))
     var evidenceIDs: [String]
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable(description: "Explicit outcomes only; empty lists are expected when none were stated.")
+private struct NativeOutcomesDraft {
+    @Guide(description: "Decisions the speakers explicitly made or agreed. Preserve negation and conditions. Empty if none.", .maximumCount(3))
+    var decisions: [NativeSummaryClaim]
+    @Guide(description: "Tasks someone explicitly committed to or was asked to do, with the named owner and timing only when stated. Empty if none.", .maximumCount(4))
+    var actionItems: [NativeSummaryClaim]
 }
 
 @available(macOS 26, iOS 26, *)

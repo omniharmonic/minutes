@@ -43,7 +43,8 @@ struct LocalSummaryProviderTests {
         #expect(requests.allSatisfy { $0.0.utf8.count + $0.1.utf8.count <= 1_800 })
         #expect(requests.contains { $0.1.contains("FINAL_TRANSCRIPT") })
         #expect(requests.contains { $0.1.contains("FINAL_NOTE") })
-        let evidence = requests.flatMap { request in request.1.components(separatedBy: "\n").compactMap { line -> [String: String]? in
+        // The outcomes pass re-reads the same chunks; coverage is checked on the summary pass.
+        let evidence = requests.filter { !$0.0.hasPrefix("Extract explicit outcomes.") }.flatMap { request in request.1.components(separatedBy: "\n").compactMap { line -> [String: String]? in
             guard let data = line.data(using: .utf8) else { return nil }
             return (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
         } }

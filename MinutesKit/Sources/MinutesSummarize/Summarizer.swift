@@ -66,6 +66,10 @@ public final class Summarizer: Sendable {
         let fallbackOverview = highlights.isEmpty ? "No transcript is available." : highlights.map(\.text).joined(separator: " ")
         var generatedMarkdown: String?
         var missedChunks = 0, totalChunks = 0
+        // Chronological sections (the prompt each covered and its notes) and
+        // model-extracted outcomes make long meetings readable beyond 3 bullets.
+        var sections: [(prompt: String, notes: String)] = []
+        var outcomes: [String] = []
         let evidence = SummaryEvidence.records(meeting: meeting, utterances: utterances)
         if let provider, !evidence.isEmpty, !insufficient {
             let brief = utterances.reduce(0) { $0 + $1.text.split(whereSeparator: \.isWhitespace).count } <= 40 && meeting.userNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
@@ -81,7 +85,11 @@ public final class Summarizer: Sendable {
             var parts: [String] = []
             var lastMiss: (any Error)?
             for prompt in prompts {
-                do { parts.append(try await Self.generateValidated(provider: provider, instructions: instructions, prompt: prompt)) }
+                do {
+                    let notes = try await Self.generateValidated(provider: provider, instructions: instructions, prompt: prompt)
+                    parts.append(notes)
+                    if (2...Self.maximumSections).contains(prompts.count) { sections.append((prompt, notes)) }
+                }
                 catch where Self.isChunkLevelMiss(error) { lastMiss = error; missedChunks += 1 }
             }
             if let lastMiss, parts.count * 2 < prompts.count { throw lastMiss }
@@ -110,6 +118,7 @@ public final class Summarizer: Sendable {
                             combined.append(SummaryEvidence.passThrough(prompt: prompt))
                         }
                     }
+                    if sections.isEmpty, (2...Self.maximumSections).contains(reductions.count) { sections = Array(zip(reductions, combined)) }
                     if reductions.count == 1 { parts = combined; converged = true; break }
                     let next = try SummaryEvidence.draftRecords(combined)
                     // A model need not shrink each pass. Earlier levels already
@@ -122,6 +131,14 @@ public final class Summarizer: Sendable {
                 if !converged, let latestLevel { parts = latestLevel }
             }
             generatedMarkdown = Self.conciseDraft(parts)
+            if !brief {
+                // From section-level notes where they exist: on raw transcript
+                // chunks the local model copied speech ("Yeah", run-on quotes)
+                // instead of stating outcomes. Notes keep owners and source IDs.
+                for prompt in sections.isEmpty ? prompts : sections.map(\.prompt) {
+                    outcomes += await Self.extractOutcomes(provider: provider, prompt: prompt)
+                }
+            }
         }
 
         // Render Markdown
@@ -138,7 +155,7 @@ public final class Summarizer: Sendable {
             if missedChunks > 0 {
                 md += "*\(missedChunks) of \(totalChunks) transcript sections could not be summarized by the model and are not reflected here. The full transcript is preserved.*\n\n"
             }
-            md += "\(generatedMarkdown)\n\n"
+            md += Self.structuredNotes(overview: generatedMarkdown, outcomes: outcomes, sections: sections, utterances: utterances, timed: meeting.platform != "transcript_import")
         } else {
             if insufficient {
                 md += "\n## Not enough conversation to summarize\nOnly a self-introduction or greeting was recorded. No AI summary was generated.\n\n"
@@ -228,6 +245,76 @@ public final class Summarizer: Sendable {
         guard candidates.count > 6 else { return candidates }
         // Cover the conversation rather than reproducing only its introduction.
         return (0..<6).map { candidates[Int((Double($0) * Double(candidates.count - 1) / 5).rounded())] }
+    }
+
+    static let maximumSections = 8
+    static let outcomeInstructions = """
+    Extract explicit outcomes. List only decisions the speakers actually made and tasks someone explicitly committed to or was asked to do. Prefix each line with "Decision:" or "Action:". Name an owner only when the evidence names them. Cite exact supplied source IDs in brackets. If there are none, return nothing. Never invent owners, dates or commitments; preserve negation.
+    """
+
+    /// Decisions and action items from one chunk. Missing or unverifiable
+    /// outcomes are omitted rather than failing the summary.
+    static func extractOutcomes(provider: any LLMProvider, prompt: String) async -> [String] {
+        guard (try? await provider.fitsInput(system: outcomeInstructions, prompt: prompt)) == true else {
+            logger.info("Outcomes skipped: chunk exceeds input budget"); return []
+        }
+        let output: String
+        do { output = try await provider.generate(system: outcomeInstructions, prompt: prompt) }
+        catch { logger.info("Outcomes unavailable for a chunk: \(String(describing: type(of: error)), privacy: .public)"); return [] }
+        let lines = output.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.range(of: #"^-?\s*(Decision|Action):"#, options: .regularExpression) != nil }
+        let sources = SummaryEvidence.transcriptTexts(in: prompt)
+        let kept = lines.filter { line in
+            guard (try? SummaryEvidence.validate(output: line, prompt: prompt)) != nil else { return false }
+            let text = line.replacingOccurrences(of: #"^-?\s*(Decision|Action):\s*|\[[TN][0-9]+\]"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = text.split(whereSeparator: \.isWhitespace).count
+            // Outcomes are statements: not questions, filler or copied speech.
+            let copied = words >= 6 && sources.contains { $0.localizedCaseInsensitiveContains(text) }
+            return (4...30).contains(words) && !text.contains("?") && !copied
+        }.map { $0.hasPrefix("-") ? $0 : "- " + $0 }
+        logger.info("Outcomes: \(lines.count, privacy: .public) proposed, \(kept.count, privacy: .public) kept")
+        return kept
+    }
+
+    /// Overview, then outcomes, then timed sections headed by the transcript's own key phrase.
+    static func structuredNotes(overview: String, outcomes: [String], sections: [(prompt: String, notes: String)],
+                                utterances: [Utterance], timed: Bool) -> String {
+        var seen: Set<String> = []
+        func unique(_ lines: [String]) -> [String] {
+            lines.filter { seen.insert($0.replacingOccurrences(of: #"\[[TN][0-9]+\]"#, with: "", options: .regularExpression).lowercased().trimmingCharacters(in: .whitespaces)).inserted }
+        }
+        guard !outcomes.isEmpty || sections.count > 1 else { return overview + "\n\n" }
+        var md = "### Overview\n\(overview)\n\n"
+        // The local model labels loosely; an explicit "will"/"should" is a commitment.
+        let commitment = #"\b(will|should|needs? to|is going to)\b"#
+        let labelled = outcomes.map { line -> (isAction: Bool, text: String) in
+            let text = line.replacingOccurrences(of: #"(Decision|Action): "#, with: "", options: .regularExpression)
+            return (line.contains("Action:") || text.range(of: commitment, options: [.regularExpression, .caseInsensitive]) != nil, text)
+        }
+        let decisions = unique(labelled.filter { !$0.isAction }.map(\.text))
+        let actions = unique(labelled.filter(\.isAction).map(\.text))
+        if !decisions.isEmpty { md += "### Decisions\n" + decisions.joined(separator: "\n") + "\n\n" }
+        if !actions.isEmpty { md += "### Action items\n" + actions.joined(separator: "\n") + "\n\n" }
+        guard sections.count > 1 else { return md }
+        md += "### Discussion\n"
+        for section in sections {
+            let indices = SummaryEvidence.suppliedIDs(in: section.prompt).compactMap { id -> Int? in
+                guard id.hasPrefix("T"), let number = Int(id.dropFirst()), number >= 1, number <= utterances.count else { return nil }
+                return number - 1
+            }
+            guard let first = indices.min(), let last = indices.max() else { continue }
+            let span = Array(utterances[first...last])
+            var heading = timed ? "\(Self.clock(span.first!.start))–\(Self.clock(span.last!.end))" : ""
+            if let phrase = MeetingTitleGenerator.suggest(from: span) { heading += heading.isEmpty ? phrase : " · " + phrase }
+            md += "#### \(heading.isEmpty ? "Section" : heading)\n" + section.notes.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: "\n") + "\n\n"
+        }
+        return md
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded(.down)))
+        return total >= 3_600 ? String(format: "%d:%02d:%02d", total / 3_600, (total / 60) % 60, total % 60) : String(format: "%d:%02d", total / 60, total % 60)
     }
 
     /// Failures confined to one chunk's content. Availability, cancellation and
