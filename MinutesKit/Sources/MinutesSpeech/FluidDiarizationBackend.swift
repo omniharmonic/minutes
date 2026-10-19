@@ -56,11 +56,16 @@ struct AutomaticSpeakerClusteringPolicy: Sendable {
 /// people alternating turns over call audio measured 0.41). Fragments carry
 /// too little audio for a reliable embedding, so, as pyannote's
 /// min_cluster_size does, each joins its most similar substantial cluster on
-/// the same track without a distance bound.
+/// the same track. A short speaker (a sentence or two) stays separate only
+/// when unlike every substantial voice: on that call, short clusters measured
+/// 0.60-0.97 from the main voices, so a lower bound would split ~9 more.
 struct SpeakerConsolidationPolicy: Sendable {
     let minimumDistinctSpeakerSeconds: Double
     let maximumDuplicateCosineDistance: Float
-    static let standard = Self(minimumDistinctSpeakerSeconds: 5, maximumDuplicateCosineDistance: 0.25)
+    let minimumShortSpeakerSeconds: Double
+    let minimumShortSpeakerCosineDistance: Float
+    static let standard = Self(minimumDistinctSpeakerSeconds: 5, maximumDuplicateCosineDistance: 0.25,
+                               minimumShortSpeakerSeconds: 2, minimumShortSpeakerCosineDistance: 0.9)
 
     /// Maps each input id to the id that survives. Inputs are unit centroids.
     func canonicalIDs(_ clusters: [(id: String, centroid: [Float], seconds: Double)]) -> [String: String] {
@@ -90,7 +95,9 @@ struct SpeakerConsolidationPolicy: Sendable {
         }
         for cluster in clusters where cluster.seconds < minimumDistinctSpeakerSeconds {
             let nearest = groups.min { distance(cluster.centroid, $0.sum) < distance(cluster.centroid, $1.sum) }!
-            mapping[cluster.id] = nearest.id
+            let isDistinctShortSpeaker = cluster.seconds >= minimumShortSpeakerSeconds
+                && distance(cluster.centroid, nearest.sum) >= minimumShortSpeakerCosineDistance
+            if !isDistinctShortSpeaker { mapping[cluster.id] = nearest.id }
         }
         return mapping
     }

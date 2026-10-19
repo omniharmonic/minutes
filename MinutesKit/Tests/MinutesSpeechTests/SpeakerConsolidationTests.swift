@@ -43,6 +43,20 @@ struct SpeakerConsolidationTests {
         #expect(Set(mapping.values) == ["a", "b"])
     }
 
+    @Test("A short speaker unlike every main voice stays separate; similar or tiny fragments join")
+    func shortDistinctSpeakersKept() {
+        // 0.9 cosine distance ≈ 84°; 0.6 ≈ 66°.
+        let mapping = policy.canonicalIDs([
+            (id: "a", centroid: voice(0), seconds: 900),
+            (id: "guest", centroid: voice(-88), seconds: 2.4),
+            (id: "similar", centroid: voice(66), seconds: 3.0),
+            (id: "blip", centroid: voice(-90), seconds: 0.8),
+        ])
+        #expect(mapping["guest"] == "guest")
+        #expect(mapping["similar"] == "a")
+        #expect(mapping["blip"] == "a")
+    }
+
     @Test("A short recording with no substantial voice keeps every cluster")
     func shortRecordingUnchanged() {
         let mapping = policy.canonicalIDs([
