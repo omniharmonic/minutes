@@ -325,4 +325,5 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [ ] Notarization needs a `notarytool` keychain profile (none on this Mac).
 - [x] Owner follow-ups: iOS record button now Voice Memos proportions (48 pt core in a 60 pt ring); the meeting list uses plain rows so swipes slide without the inset card's corner switching mid-gesture. Mac 60 installed.
 - [x] iCloud sync (MinutesSync, CKSyncEngine): meetings with transcripts, summaries, notes, moments, folders, people and optional recordings; three-way merge; voice embeddings stay local. `minutes-cli sync status|pending|payload|reset`. 413 tests pass. Mac 61, iOS 58.
-- [ ] Owner: Developer portal iCloud container + capability + Developer ID profile (docs/SYNC_SETUP.md), then build with `MINUTES_CLOUDKIT_PROFILE` / `MINUTES_CLOUDKIT=1` and deploy the CloudKit schema to Production.
+- [x] iCloud provisioning done without the portal (Xcode-managed container/capability, Developer ID profile via Xcode export), schema imported with cktool and deployed to Production. Live: Mac library uploaded (283 records) and an isolated library downloaded an identical copy with no voice embeddings. Fixed a crash found live (an unlocked store read raced the main thread). Mac 63 (sync on), iOS 59.
+- [ ] Owner: turn on Settings → Sync on the iPhone and confirm meetings appear.

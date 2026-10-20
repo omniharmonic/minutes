@@ -1833,7 +1833,8 @@ extension MinutesStore {
     }
 
     public func isMeetingInTrash(id: String) throws -> Bool {
-        try folderStatement("SELECT 1 FROM meeting_trash WHERE meeting_id=?", values: [id]) { statement in
+        lock.lock(); defer { lock.unlock() }
+        return try folderStatement("SELECT 1 FROM meeting_trash WHERE meeting_id=?", values: [id]) { statement in
             let code = sqlite3_step(statement)
             guard code == SQLITE_ROW || code == SQLITE_DONE else { throw databaseError("Read trash") }
             return code == SQLITE_ROW

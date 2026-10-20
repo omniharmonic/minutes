@@ -16,30 +16,28 @@ the person turns it on in Settings → Sync.
 
 Edits made on two devices merge field by field. When both changed the same field, the other device's value wins. The exceptions are notes, where both versions are kept, and moments, where both sets are kept. A meeting permanently deleted on one device goes to Recently Deleted on the others.
 
-## One-time Apple Developer setup (team 83Y42N33H8)
+## Setup (done 2026-10-20)
 
-1. **Certificates, Identifiers & Profiles → Identifiers → iCloud Containers →** add `iCloud.ai.nosaas.minutes`.
-2. **Identifiers → App IDs:** for both `app.minutes.ios` (iOS) and `ai.nosaas.minutes` (Mac), enable **iCloud**, choose **CloudKit**, and assign the container.
-3. **Profiles:**
-   - Create a **Developer ID** profile for `ai.nosaas.minutes` and download it, e.g. to `~/Downloads/Minutes_DeveloperID.provisionprofile`.
-   - iOS uses automatic signing. Either sign in to Xcode → Settings → Accounts, or create an iOS development profile for `app.minutes.ios` that includes iCloud.
-4. **CloudKit Console:**
-   - Run one sync from a development build so the record types (`Meeting`, `Folder`, `Person`, `Audio`, each with `payload` and `schema` fields, and `audio` on Audio) are created.
-   - Then **Deploy Schema Changes to Production**. Developer ID and TestFlight builds use the Production environment.
+- **Container and capabilities:** Xcode automatic signing registered the container `iCloud.ai.nosaas.minutes` and the iCloud capability on `app.minutes.ios` the first time it built the entitlement.
+- **Mac Developer ID profile:** SwiftPM can't request profiles, so a throwaway Xcode Mac target with bundle id `ai.nosaas.minutes` and the iCloud entitlement was archived unsigned. The archived app was then ad-hoc signed with the entitlement and exported with `method=developer-id, signingStyle=automatic`. Xcode created "Mac Team Direct Provisioning Profile: ai.nosaas.minutes", including the container, with environment Production. It is kept outside the repo at `build/signing/Minutes_DeveloperID.provisionprofile`; to regenerate it, repeat the export.
+- **Schema:** `docs/cloudkit-schema.ckdb` holds the record types Meeting, Folder, Person and Audio. Each has a `payload` asset and a `schema` INT64; Audio also has an `audio` asset. It was imported with `xcrun cktool import-schema` (using a management token saved with `cktool save-token`) and deployed to Production in CloudKit Console. Any later schema change goes the same way, and fields can only ever be added.
+- **Environment:** every build uses the Production environment. Developer ID is always Production, and the iOS entitlement sets `com.apple.developer.icloud-container-environment = Production` explicitly, so development-signed iPhone builds share data with the Mac.
 
-## Building with sync
+## Building
 
 ```sh
-# Mac (Developer ID + profile):
-MINUTES_CLOUDKIT_PROFILE=~/Downloads/Minutes_DeveloperID.provisionprofile \
+MINUTES_CLOUDKIT_PROFILE=$PWD/build/signing/Minutes_DeveloperID.provisionprofile \
 DEVELOPER_ID_APPLICATION="Developer ID Application: BENJAMIN GLEASON ROSS (83Y42N33H8)" \
 MINUTES_BUNDLE_GOOGLE_REGISTRATION=1 ./scripts/build-app.sh
-
-# iOS:
-MINUTES_CLOUDKIT=1 Apps/generate-project.sh   # adds the entitlement + MinutesCloudKitContainer
 ```
 
-Without these, builds behave as before, and Settings explains that sync isn't included in the build. The app only creates a CloudKit container when the build's Info.plist names one (`MinutesCloudKitContainer`), because CloudKit crashes in an app that lacks the entitlement.
+iOS has the entitlement in `Apps/project.yml`, so builds made with `-allowProvisioningUpdates` sign it automatically. A Mac build without the profile still works, but sync is unavailable in it.
+
+## Verified
+
+- The owner's Mac library (264 meetings, 1,164 transcript passages, 73 summaries, 95 speakers, 3 folders, 16 people) uploaded as 283 records.
+- An isolated empty library on the same Mac downloaded an identical copy: same counts and same content hashes, with zero voice embeddings.
+- Its next scan found nothing to send back.
 
 ## CLI
 

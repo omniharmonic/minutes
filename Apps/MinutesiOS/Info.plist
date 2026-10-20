@@ -45,6 +45,8 @@
 	<string>618880165655-h7cgl66bg5i3539cv8npvthhp9i53uhk.apps.googleusercontent.com</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>MinutesCloudKitContainer</key>
+	<string>iCloud.ai.nosaas.minutes</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Connect meetings and invitees from the calendars you configure on this device.</string>
 	<key>NSCalendarsUsageDescription</key>

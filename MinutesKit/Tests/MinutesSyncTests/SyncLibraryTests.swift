@@ -196,6 +196,26 @@ struct SyncLibraryTests {
         #expect(cloud.records["Meeting:live"] == nil)
     }
 
+    @Test("Scanning for changes is safe while another thread writes (regression: unlocked trash read crashed)")
+    func concurrentScan() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("minutes-sync-race-\(UUID().uuidString).db").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try MinutesStore(dbPath: path)
+        for index in 0..<40 { try store.saveMeeting(Meeting(id: "m\(index)", title: "Meeting \(index)", status: "summarized")) }
+        let library = SyncLibrary(store: store)
+        DispatchQueue.concurrentPerform(iterations: 8) { worker in
+            for round in 0..<25 {
+                if worker % 2 == 0 { _ = try? library.pendingChanges() }
+                else {
+                    let id = "m\((worker * 7 + round) % 40)"
+                    try? store.trashMeeting(id: id); try? store.restoreMeeting(id: id)
+                    try? store.saveBookmark(Bookmark(meetingId: id, timestamp: Double(round), label: "Race"))
+                }
+            }
+        }
+        #expect(try library.pendingChanges().count == 40)
+    }
+
     @Test("Record names round-trip and reject unknown kinds")
     func recordNames() {
         #expect(SyncRecordName("Meeting:abc")?.kind == .meeting)
