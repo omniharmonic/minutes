@@ -6,7 +6,7 @@ import MinutesCore
 
 /// What Settings shows about sync. Never contains meeting content.
 public struct LibrarySyncStatus: Sendable, Equatable {
-    public enum Phase: Sendable, Equatable { case idle, syncing, signedOut, failed(String) }
+    public enum Phase: Sendable, Equatable { case idle, syncing, signedOut, failed(String), removedFromICloud }
     public var phase: Phase
     public var lastSynced: Date?
     public var pendingCount: Int
@@ -64,9 +64,11 @@ public actor CloudKitLibrarySync: CKSyncEngineDelegate {
         publish(.syncing)
         do {
             try queueLocalChanges()
+            guard self.engine != nil else { return }
             // Meetings first, so a recording finds its meeting when it arrives.
             try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
-            if includesRecordings { try await engine.fetchChanges(.init(scope: .zoneIDs([recordingsZoneID]))) }
+            if includesRecordings, self.engine != nil { try await engine.fetchChanges(.init(scope: .zoneIDs([recordingsZoneID]))) }
+            guard self.engine != nil else { return }
             try await engine.sendChanges()
             status.lastSynced = Date()
             publish(.idle)
@@ -89,6 +91,8 @@ public actor CloudKitLibrarySync: CKSyncEngineDelegate {
         engine.state.add(pendingDatabaseChanges: [.deleteZone(zoneID), .deleteZone(recordingsZoneID)])
         try await engine.sendChanges()
         try store.resetSyncRecordStates()
+        try store.setLibrarySetting(Self.stateKey, value: nil)
+        self.engine = nil
     }
 
     private func queueLocalChanges() throws {
@@ -138,9 +142,13 @@ public actor CloudKitLibrarySync: CKSyncEngineDelegate {
             @unknown default: break
             }
         case .fetchedDatabaseChanges(let changes):
-            if changes.deletions.contains(where: { $0.zoneID == zoneID || $0.zoneID == recordingsZoneID }) {
-                // The library was removed from iCloud elsewhere; local copies stay.
+            if changes.deletions.contains(where: { $0.zoneID == zoneID }) {
+                // The person removed the iCloud copy on another device. Keep local
+                // meetings, and stop here rather than uploading everything again.
                 try? store.resetSyncRecordStates()
+                try? store.setLibrarySetting(Self.stateKey, value: nil)
+                engine = nil
+                publish(.removedFromICloud)
             }
         case .fetchedRecordZoneChanges(let changes):
             var changed = false

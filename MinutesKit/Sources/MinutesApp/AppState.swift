@@ -123,6 +123,8 @@ public final class AppState: ObservableObject {
     @Published public private(set) var googleRefreshing = false
     @Published public var googleConnected = false
     private var googleConnection: GoogleCalendarConnection?
+    /// Calendars in the person's Google list, for choosing which ones Minutes shows.
+    @Published public internal(set) var googleCalendarChoices: [GoogleCalendarDescriptor] = []
     private var googleRefreshTask: Task<Void, Never>?
     private var googleAuthorizationTask: Task<Void, any Error>?
     private var googleOperation = 0
@@ -507,6 +509,32 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public var selectedGoogleCalendarIDs: [String] {
+        let ids = googleCalendarIDs.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return ids.isEmpty ? ["primary"] : ids
+    }
+
+    public func isGoogleCalendarSelected(_ calendar: GoogleCalendarDescriptor) -> Bool {
+        selectedGoogleCalendarIDs.contains(calendar.id) || (calendar.primary == true && selectedGoogleCalendarIDs.contains("primary"))
+    }
+
+    /// Reads the calendar list (calendar.calendarlist.readonly) so the person can pick calendars by name.
+    public func loadGoogleCalendarChoices() async {
+        guard let connection = googleConnection else { googleCalendarChoices = []; return }
+        do {
+            googleCalendarChoices = try await connection.calendars()
+                .sorted { ($0.primary == true ? 0 : 1, $0.summary ?? $0.id) < ($1.primary == true ? 0 : 1, $1.summary ?? $1.id) }
+        } catch { googleMessage = "Could not load your calendar list: \(error.localizedDescription)" }
+    }
+
+    public func setGoogleCalendar(_ calendar: GoogleCalendarDescriptor, included: Bool) {
+        // Store real ids so the alias "primary" never hides which calendar is chosen.
+        var ids = googleCalendarChoices.filter { $0.id != calendar.id && isGoogleCalendarSelected($0) }.map(\.id)
+        if included { ids.append(calendar.id) }
+        googleCalendarIDs = (ids.isEmpty ? ["primary"] : ids).joined(separator: ",")
+        refreshCalendar()
+    }
+
     public func disconnectGoogleCalendar() async {
         preferences.set("none", forKey: "calendarProvider")
         googleOperation += 1; let operation = googleOperation
@@ -515,7 +543,7 @@ public final class AppState: ObservableObject {
         defer { if operation == googleOperation { googleConnecting = false } }
         calendarGeneration += 1; googleRefreshTask?.cancel(); googleRefreshTask = nil; googleRefreshing = false
         let connection = googleConnection
-        googleConnection = nil; googleConnected = false
+        googleConnection = nil; googleConnected = false; googleCalendarChoices = []
         if calendarSource == .google || !calendarConnected {
             calendarConnected = false; upcomingEvents = []; calendarPrompt = nil; calendarTimer?.cancel()
             if !scheduledCalendarNotifications.isEmpty {
@@ -554,7 +582,7 @@ public final class AppState: ObservableObject {
         guard let connection = googleConnection, calendarSource == .google else { return }
         let generation = calendarGeneration
         do {
-            let events = try await connection.events(in: DateInterval(start: now, duration: 7 * 86400))
+            let events = try await connection.events(in: DateInterval(start: now, duration: 7 * 86400), calendarIDs: selectedGoogleCalendarIDs)
             guard generation == calendarGeneration, !Task.isCancelled, calendarSource == .google else { return }
             upcomingEvents = events
             calendarMessage = "\(events.count) upcoming Google meetings. Invitees are not confirmed speakers."
@@ -641,7 +669,7 @@ public final class AppState: ObservableObject {
         let interval = DateInterval(start: meeting.startedAt.addingTimeInterval(-3_600), end: max(end, meeting.startedAt) + 3_600)
         do {
             let events: [CalendarMeetingEvent]
-            if calendarSource == .google, let connection = googleConnection { events = try await connection.events(in: interval) }
+            if calendarSource == .google, let connection = googleConnection { events = try await connection.events(in: interval, calendarIDs: selectedGoogleCalendarIDs) }
             else if calendarConnected { events = try calendarProvider.events(in: interval) }
             else { return [] }
             return CalendarMeetingEvent.overlapping(events, start: meeting.startedAt, end: end)

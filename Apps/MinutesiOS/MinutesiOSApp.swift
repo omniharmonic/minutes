@@ -396,6 +396,7 @@ private struct IOSRootView: View {
             Text(state.googleMessage).font(.footnote).foregroundStyle(.secondary)
             Button("Connect Google") { Task { await state.connectGoogleCalendar() } }.disabled(state.googleConnecting)
             Button("Resume saved Google connection") { Task { await state.resumeGoogleCalendar() } }.disabled(state.googleConnecting)
+            GoogleCalendarPicker(appState: state)
             Button(state.googleConnecting ? "Cancel Google sign-in" : "Disconnect Google", role: .destructive) {
                 Task { await state.disconnectGoogleCalendar() }
             }.disabled(!state.googleConnected && !state.googleConnecting)
@@ -403,8 +404,6 @@ private struct IOSRootView: View {
                 .font(.footnote).foregroundStyle(.secondary)
             DisclosureGroup("Advanced") {
                 TextField("iOS public client ID", text: $state.googleIOSClientID)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("Calendar IDs, separated by commas", text: $state.googleCalendarIDs)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Text("The app’s Google registration is preconfigured. Change this only when using a different native OAuth client; tokens remain in Keychain.")
                     .font(.footnote).foregroundStyle(.secondary)

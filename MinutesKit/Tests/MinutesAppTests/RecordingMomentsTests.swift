@@ -3,6 +3,7 @@ import AVFoundation
 import Testing
 import MinutesCore
 import MinutesSpeech
+import MinutesCalendar
 @testable import MinutesApp
 
 @MainActor struct RecordingMomentsTests {
@@ -46,5 +47,22 @@ import MinutesSpeech
         state.iCloudSyncEnabled = true
         #expect(state.librarySync == nil && state.librarySyncStatus == nil)
         #expect(state.librarySyncDescription.contains("isn’t included"))
+    }
+}
+
+@MainActor struct GoogleCalendarChoiceTests {
+    @Test("Choosing calendars by name stores real ids and keeps the main calendar until it is unticked")
+    func chooseCalendars() throws {
+        let state = try AppState(store: MinutesStore(dbPath: ":memory:"), audioDirectory: FileManager.default.temporaryDirectory,
+                                 preferences: UserDefaults(suiteName: "minutes-gcal-" + UUID().uuidString)!)
+        let json = #"[{"id":"me@example.test","summary":"Me","primary":true},{"id":"team@group.calendar.google.com","summary":"Team"}]"#
+        state.googleCalendarChoices = try JSONDecoder().decode([GoogleCalendarDescriptor].self, from: Data(json.utf8))
+        #expect(state.isGoogleCalendarSelected(state.googleCalendarChoices[0]) && !state.isGoogleCalendarSelected(state.googleCalendarChoices[1]))
+        state.setGoogleCalendar(state.googleCalendarChoices[1], included: true)
+        #expect(state.selectedGoogleCalendarIDs == ["me@example.test", "team@group.calendar.google.com"])
+        state.setGoogleCalendar(state.googleCalendarChoices[0], included: false)
+        #expect(state.selectedGoogleCalendarIDs == ["team@group.calendar.google.com"])
+        state.setGoogleCalendar(state.googleCalendarChoices[1], included: false)
+        #expect(state.selectedGoogleCalendarIDs == ["primary"])
     }
 }

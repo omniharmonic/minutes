@@ -6,6 +6,7 @@ import MinutesUI
 @available(macOS 15.0, iOS 18.0, *)
 public struct LibrarySyncSettings: View {
     @ObservedObject var appState: AppState
+    @State private var confirmingRemoval = false
     public init(appState: AppState) { self.appState = appState }
 
     public var body: some View {
@@ -29,6 +30,12 @@ public struct LibrarySyncSettings: View {
                     Button("Sync Now") { appState.syncLibraryNow() }
                         .disabled(appState.librarySyncStatus?.phase == .syncing)
                 }
+                Button("Remove iCloud Copy…", role: .destructive) { confirmingRemoval = true }
+                    .confirmationDialog("Remove Minutes data from iCloud?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
+                        Button("Remove from iCloud", role: .destructive) { Task { await appState.removeLibraryFromICloud() } }
+                    } message: {
+                        Text("Deletes the synced copy for all your devices and turns sync off here. Meetings on this device are kept. Other devices keep their own copies until you remove them there.")
+                    }
             } else {
                 Text(appState.librarySyncDescription).font(.callout).foregroundStyle(.secondary)
             }

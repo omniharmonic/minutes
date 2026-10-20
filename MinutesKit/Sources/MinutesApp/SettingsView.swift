@@ -138,14 +138,14 @@ public struct SettingsView: View {
                         Text("Updating meeting events…").font(.callout).foregroundStyle(.secondary)
                     }.accessibilityElement(children: .combine)
                 }
+                GoogleCalendarPicker(appState: appState)
                 Button(appState.googleConnected ? "Refresh Calendar" : "Reconnect Saved Account") {
                     Task { await appState.resumeGoogleCalendar() }
                 }.disabled(appState.googleConnecting || appState.googleRefreshing)
                 DisclosureGroup("Advanced") {
                     TextField("Mac client ID", text: $appState.googleDesktopClientID)
                     TextField("iOS client ID", text: $appState.googleIOSClientID)
-                    TextField("Calendar IDs", text: $appState.googleCalendarIDs)
-                    Text("Public OAuth client IDs are required for direct sign-in. Calendar IDs default to primary. Credentials stay in Keychain.")
+                    Text("Public OAuth client IDs are required for direct sign-in. Credentials stay in Keychain.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

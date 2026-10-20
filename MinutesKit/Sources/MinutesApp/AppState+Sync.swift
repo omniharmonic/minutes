@@ -21,6 +21,7 @@ extension AppState {
         case .syncing: return "Syncing…"
         case .signedOut: return "Sign in to iCloud in System Settings to sync."
         case .failed(let message): return "Sync paused: \(message)"
+        case .removedFromICloud: return "Turned off: the iCloud copy was removed."
         case .idle:
             let when = status.lastSynced.map { "Up to date as of \($0.formatted(date: .omitted, time: .shortened))." } ?? "Up to date."
             return status.pendingCount > 0 ? "\(status.pendingCount) changes waiting to upload." : when
@@ -43,7 +44,13 @@ extension AppState {
         let sync = CloudKitLibrarySync(containerIdentifier: container, store: store,
             audioDirectory: iCloudSyncRecordings ? managedAudioDirectory : nil,
             onLibraryChanged: { [weak self] in Task { @MainActor in self?.reloadAfterSync() } },
-            onStatus: { [weak self] status in Task { @MainActor in self?.librarySyncStatus = status } })
+            onStatus: { [weak self] status in Task { @MainActor in
+                guard let self else { return }
+                if status.phase == .removedFromICloud {
+                    self.iCloudSyncEnabled = false
+                    self.statusMessage = "Sync was turned off because Minutes data was removed from iCloud on another device. Meetings here are unchanged."
+                } else { self.librarySyncStatus = status }
+            } })
         librarySync = sync
         Task { await sync.start() }
         // Without push notifications, check every few minutes while the app runs.
@@ -54,6 +61,16 @@ extension AppState {
         guard #available(macOS 14.0, iOS 17.0, *), let sync = librarySync as? CloudKitLibrarySync,
               !isRecording, !isProcessing else { return }
         Task { await sync.syncNow() }
+    }
+
+    /// Deletes the library from the person's iCloud (all devices) and turns sync off here.
+    public func removeLibraryFromICloud() async {
+        guard #available(macOS 14.0, iOS 17.0, *), let sync = librarySync as? CloudKitLibrarySync else { return }
+        do {
+            try await sync.deleteCloudCopy()
+            iCloudSyncEnabled = false
+            statusMessage = "Removed Minutes data from iCloud. Meetings on this device are unchanged."
+        } catch { statusMessage = "Could not remove the iCloud copy: \(error.localizedDescription)" }
     }
 
     func stopLibrarySync() {

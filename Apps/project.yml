@@ -33,6 +33,7 @@ targets:
       - path: ../MinutesKit/Sources/MinutesApp/ParachuteVaultSettings.swift
       - path: ../MinutesKit/Sources/MinutesApp/AppState+Sync.swift
       - path: ../MinutesKit/Sources/MinutesApp/LibrarySyncSettings.swift
+      - path: ../MinutesKit/Sources/MinutesApp/GoogleCalendarPicker.swift
       - path: ../MinutesKit/Sources/MinutesApp/MeetingMarkdownDocument.swift
       - path: ../MinutesKit/Sources/MinutesApp/FolderLibrary.swift
     dependencies:
