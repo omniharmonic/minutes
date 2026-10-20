@@ -8,6 +8,8 @@ import MinutesSpeech
 
 @MainActor private final class SystemRecorderFixture: SystemAudioRecording {
     var captureError: String?
+    var recoveryNotice: String?
+    var interruptions: [String] = []
     var capturing = false
     var directory: URL?
     var includedMicrophone: Bool?
@@ -22,7 +24,7 @@ import MinutesSpeech
     func stopRecording() async throws -> SynchronizedCaptureResult {
         capturing = false
         let root = directory!
-        let result = SynchronizedCaptureResult(directory: root, systemAudioURL: root.appendingPathComponent("system.caf"), microphoneURL: root.appendingPathComponent("microphone.caf"), processingURL: failFinish ? nil : root.appendingPathComponent("mixed.caf"), manifestURL: root.appendingPathComponent("capture.json"), duration: 0.1, issues: failFinish ? ["Synthetic incomplete source"] : [])
+        let result = SynchronizedCaptureResult(directory: root, systemAudioURL: root.appendingPathComponent("system.caf"), microphoneURL: root.appendingPathComponent("microphone.caf"), processingURL: failFinish ? nil : root.appendingPathComponent("mixed.caf"), manifestURL: root.appendingPathComponent("capture.json"), duration: 0.1, issues: failFinish ? ["Synthetic incomplete source"] : [], interruptions: interruptions)
         if failFinish { throw CaptureFinalizationError(result: result) }
         let format = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600)!

@@ -14,9 +14,11 @@ public struct SynchronizedCaptureResult: Sendable {
     public let manifestURL: URL
     public let duration: Double
     public let issues: [String]
+    /// Gaps and missing sources that were filled with silence; the recording is still usable.
+    public let interruptions: [String]
 
     public init(directory: URL, systemAudioURL: URL, microphoneURL: URL?, processingURL: URL?,
-                manifestURL: URL, duration: Double, issues: [String]) {
+                manifestURL: URL, duration: Double, issues: [String], interruptions: [String] = []) {
         self.directory = directory
         self.systemAudioURL = systemAudioURL
         self.microphoneURL = microphoneURL
@@ -24,6 +26,7 @@ public struct SynchronizedCaptureResult: Sendable {
         self.manifestURL = manifestURL
         self.duration = duration
         self.issues = issues
+        self.interruptions = interruptions
     }
 }
 
@@ -60,12 +63,15 @@ struct CaptureTimelineManifest: Codable, Sendable {
     let duration: Double
     let tracks: [CaptureTrackTimeline]
     let issues: [String]
+    var interruptions: [String]? = nil
 }
 
 private final class CaptureSourceWriter {
     let format: AVAudioFormat
     var file: AVAudioFile?
     var timeline: CaptureTrackTimeline
+    /// Converts a replacement device's audio (another rate or layout) into `format`.
+    var converter: (input: AVAudioFormat, converter: AVAudioConverter)?
 
     init(source: CaptureAudioSource, directory: URL, format: AVAudioFormat) throws {
         self.format = format
@@ -85,7 +91,10 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
     private let includeMicrophone: Bool
     private let lock = NSLock()
     private var writers: [CaptureAudioSource: CaptureSourceWriter] = [:]
+    /// Fatal problems: the recording cannot be saved as audio.
     private var issues: [String] = []
+    /// Device changes, gaps and missing sources: saved, disclosed, still processed.
+    private var interruptions: [String] = []
     private var finished = false
     private var finishedResult: SynchronizedCaptureResult?
     private let startedAt = Date()
@@ -101,43 +110,44 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
         try checkpoint(completed: false, processingFile: nil)
     }
 
-    var errorDescription: String? {
+    /// Asks the app to end the recording; what was captured is still mixed and processed.
+    private var stopReason: String?
+    /// Fatal problems, or a requested stop, end a recording; device changes are handled by restarting capture.
+    var errorDescription: String? { lock.withLock { issues.first ?? stopReason } }
+
+    func requestStop(_ reason: String) {
+        lock.withLock { if stopReason == nil { stopReason = reason } }
+    }
+
+    /// A source whose clock coverage has fallen behind the other one's by more than
+    /// `grace` seconds (amplitude is not used: a silent input is healthy).
+    func stalledSource(grace: Double = 3.0, ignoringMicrophone: Bool = false) -> CaptureAudioSource? {
         lock.withLock {
-            if !finished, issues.isEmpty, let failure = liveCoverageFailure() {
-                // A detected device loss is sticky. A later callback must not erase
-                // the failure or allow incomplete audio to become a successful mix.
-                issues.append(failure)
-                do { try checkpoint(completed: false, processingFile: nil) }
-                catch { issues.append("Capture failure checkpoint could not be saved: \(error.localizedDescription)") }
+            guard includeMicrophone, !finished else { return nil }
+            for source in [CaptureAudioSource.microphone, .system] where !(ignoringMicrophone && source == .microphone) {
+                let peer: CaptureAudioSource = source == .microphone ? .system : .microphone
+                if ignoringMicrophone && peer == .microphone { continue }
+                guard let peerTrack = writers[peer]?.timeline,
+                      let peerStart = peerTrack.segments.first?.presentationTime,
+                      let peerLast = peerTrack.segments.last else { continue }
+                let peerEnd = peerLast.presentationTime + Double(peerLast.frameCount) / peerTrack.sampleRate
+                let sourceEnd: Double
+                if let track = writers[source]?.timeline, let last = track.segments.last {
+                    sourceEnd = last.presentationTime + Double(last.frameCount) / track.sampleRate
+                } else {
+                    sourceEnd = peerStart
+                }
+                if peerEnd - sourceEnd > grace + 0.000_001 { return source }
             }
-            return issues.first
+            return nil
         }
     }
 
-    /// Compare stream clock coverage rather than amplitude: a silent input is healthy.
-    /// This cannot detect both streams stopping together; stream delegate errors
-    /// still handle that case. Polling never opens or changes an audio device.
-    private func liveCoverageFailure() -> String? {
-        guard includeMicrophone else { return nil }
-        let grace = 3.0
-        for source in [CaptureAudioSource.microphone, .system] {
-            let peer: CaptureAudioSource = source == .microphone ? .system : .microphone
-            guard let peerTrack = writers[peer]?.timeline,
-                  let peerStart = peerTrack.segments.first?.presentationTime,
-                  let peerLast = peerTrack.segments.last else { continue }
-            let peerEnd = peerLast.presentationTime + Double(peerLast.frameCount) / peerTrack.sampleRate
-            let sourceEnd: Double
-            if let track = writers[source]?.timeline, let last = track.segments.last {
-                sourceEnd = last.presentationTime + Double(last.frameCount) / track.sampleRate
-            } else {
-                sourceEnd = peerStart
-            }
-            if peerEnd - sourceEnd > grace + 0.000_001 {
-                let action = source == .microphone ? "check the selected input device" : "check the shared audio source"
-                return "The \(source.rawValue) stopped delivering audio; \(action). Capture coverage is incomplete; source audio is preserved."
-            }
+    func recordInterruption(_ message: String) {
+        lock.withLock {
+            if !interruptions.contains(message) { interruptions.append(message) }
+            try? checkpoint(completed: false, processingFile: nil)
         }
-        return nil
     }
 
     func recordFailure(_ message: String) {
@@ -171,13 +181,11 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
                     writer = try CaptureSourceWriter(source: source, directory: directory, format: buffer.format)
                     writers[source] = writer
                 }
-                guard writer.format.sampleRate == buffer.format.sampleRate,
-                      writer.format.channelCount == buffer.format.channelCount,
-                      writer.format.commonFormat == buffer.format.commonFormat,
-                      writer.format.isInterleaved == buffer.format.isInterleaved else {
-                    throw Self.failure("The \(source.rawValue) audio device format changed. Start a new recording; captured audio is preserved.")
-                }
+                // A replacement microphone can use another rate or layout; convert
+                // it to the track's format rather than ending the recording.
+                let buffer = try Self.conform(buffer, to: writer)
                 let count = Int64(buffer.frameLength)
+                guard count > 0 else { return }
                 var continuous = false
                 if let previous = writer.timeline.segments.last {
                     let previousEnd = previous.presentationTime + Double(previous.frameCount) / writer.timeline.sampleRate
@@ -213,19 +221,27 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
     func finish() throws -> SynchronizedCaptureResult {
         try lock.withLock {
             if let result = finishedResult {
-                if !result.issues.isEmpty { throw CaptureFinalizationError(result: result) }
+                if result.processingURL == nil { throw CaptureFinalizationError(result: result) }
                 return result
             }
             finished = true
             for writer in writers.values { writer.file = nil }
-            if writers[.system]?.timeline.frameCount ?? 0 == 0 { issues.append("No system audio samples were captured. Check the shared source, playback, and Screen Recording permission.") }
-            if includeMicrophone && writers[.microphone]?.timeline.frameCount ?? 0 == 0 { issues.append("No microphone samples were captured. Check the microphone device and permission.") }
-            // Validate callback coverage before the renderer can pad missing samples with silence.
-            issues.append(contentsOf: coverageIssues())
+            if let stopReason, !interruptions.contains(stopReason) { interruptions.append(stopReason) }
+            let hasSystem = writers[.system]?.timeline.frameCount ?? 0 > 0
+            let hasMicrophone = writers[.microphone]?.timeline.frameCount ?? 0 > 0
+            if !hasSystem && !hasMicrophone {
+                issues.append("No audio was captured. Check Screen & System Audio Recording permission and the microphone.")
+            } else {
+                if !hasSystem { interruptions.append("No Mac audio was captured; the recording has your microphone only.") }
+                if includeMicrophone && !hasMicrophone { interruptions.append("No microphone audio was captured; the recording has Mac audio only.") }
+                interruptions.append(contentsOf: coverageIssues())
+            }
             var processing: URL?
             if issues.isEmpty {
                 do {
-                    processing = try autoreleasepool { try CaptureTimelineRenderer.render(directory: directory, tracks: timelines()) }
+                    // Gaps become silence and are listed in `interruptions`.
+                    let tracks = timelines().filter { $0.frameCount > 0 }
+                    processing = try autoreleasepool { try CaptureTimelineRenderer.render(directory: directory, tracks: tracks) }
                 } catch { issues.append("Audio alignment/mixing failed: \(error.localizedDescription)") }
             }
             do { try checkpoint(completed: issues.isEmpty, processingFile: issues.isEmpty ? processing?.lastPathComponent : nil) }
@@ -235,11 +251,38 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
                 microphoneURL: includeMicrophone ? directory.appendingPathComponent("microphone.caf") : nil,
                 processingURL: issues.isEmpty ? processing : nil,
                 manifestURL: directory.appendingPathComponent("capture.json"),
-                duration: bounds().duration, issues: issues)
+                duration: bounds().duration, issues: issues, interruptions: interruptions)
             finishedResult = result
-            if !issues.isEmpty { throw CaptureFinalizationError(result: result) }
+            if result.processingURL == nil { throw CaptureFinalizationError(result: result) }
             return result
         }
+    }
+
+    /// Converts a buffer from a replacement device into the writer's format.
+    private static func conform(_ buffer: AVAudioPCMBuffer, to writer: CaptureSourceWriter) throws -> AVAudioPCMBuffer {
+        let target = writer.format
+        if buffer.format.sampleRate == target.sampleRate, buffer.format.channelCount == target.channelCount,
+           buffer.format.commonFormat == target.commonFormat, buffer.format.isInterleaved == target.isInterleaved { return buffer }
+        if writer.converter?.input != buffer.format {
+            guard let converter = AVAudioConverter(from: buffer.format, to: target) else {
+                throw failure("The replacement audio device uses a format that cannot be converted.")
+            }
+            converter.downmix = true
+            writer.converter = (buffer.format, converter)
+        }
+        let converter = writer.converter!.converter
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * target.sampleRate / buffer.format.sampleRate).rounded(.up)) + 64
+        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { throw failure("Cannot allocate conversion buffer.") }
+        var supplied = false
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, inputStatus in
+            if supplied { inputStatus.pointee = .noDataNow; return nil }
+            supplied = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+        if status == .error { throw error ?? failure("Audio conversion failed.") }
+        return output
     }
 
     /// Callback timestamps establish coverage, even when the samples themselves are silent.
@@ -254,30 +297,34 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
         // The existing 100 ms source-offset and 10 ms gap alignment remain valid.
         let edgeTolerance = 1.0
         let gapTolerance = 0.25
-        let totalGapTolerance = 1.0
         let roundingTolerance = 0.000_001
         var failures: [String] = []
         for track in tracks {
             guard let first = track.segments.first, let last = track.segments.last else { continue }
-            let name = track.source.rawValue
+            let name = track.source == .microphone ? "Microphone" : "Mac"
+            func clock(_ seconds: Double) -> String {
+                let total = max(0, Int(seconds.rounded())); return String(format: "%d:%02d", total / 60, total % 60)
+            }
             let leading = max(0, first.presentationTime - origin)
-            let trailing = max(0, end - (last.presentationTime + Double(last.frameCount) / track.sampleRate))
+            let lastEnd = last.presentationTime + Double(last.frameCount) / track.sampleRate
+            let trailing = max(0, end - lastEnd)
             if leading > edgeTolerance + roundingTolerance {
-                failures.append("The \(name) audio coverage starts \(String(format: "%.2f", leading)) seconds late. Check the audio device and start a new recording; captured source audio is preserved.")
+                failures.append("\(name) audio started at \(clock(leading)).")
             }
-            if trailing > edgeTolerance + roundingTolerance {
-                failures.append("The \(name) audio coverage ends \(String(format: "%.2f", trailing)) seconds before the recording ends. The source may have disconnected; captured source audio is preserved.")
-            }
-            var totalGap = 0.0
-            var largestGap = 0.0
+            var shortGaps = 0.0
             for (previous, next) in zip(track.segments, track.segments.dropFirst()) {
                 let previousEnd = previous.presentationTime + Double(previous.frameCount) / track.sampleRate
                 let gap = max(0, next.presentationTime - previousEnd)
-                totalGap += gap
-                largestGap = max(largestGap, gap)
+                if gap > gapTolerance + roundingTolerance {
+                    failures.append("\(name) audio is missing from \(clock(previousEnd - origin)) to \(clock(next.presentationTime - origin)).")
+                } else { shortGaps += gap }
             }
-            if largestGap > gapTolerance + roundingTolerance || totalGap > totalGapTolerance + roundingTolerance {
-                failures.append("The \(name) audio coverage has missing samples (largest gap \(String(format: "%.2f", largestGap)) seconds; total \(String(format: "%.2f", totalGap)) seconds). Check the audio device and start a new recording; captured source audio is preserved.")
+            // Many brief dropouts can add up; disclose them too.
+            if shortGaps > 1.0 + roundingTolerance {
+                failures.append("\(name) audio has brief dropouts totaling \(String(format: "%.1f", shortGaps)) seconds.")
+            }
+            if trailing > edgeTolerance + roundingTolerance {
+                failures.append("\(name) audio stopped at \(clock(lastEnd - origin)).")
             }
         }
         return failures
@@ -300,7 +347,8 @@ final class SynchronizedCaptureArchive: @unchecked Sendable {
         let timing = bounds()
         let manifest = CaptureTimelineManifest(schema: "minutes.capture/1", clock: "SCStream.synchronizationClock",
             startedAt: startedAt, completed: completed, processingFile: processingFile,
-            timelineOrigin: timing.origin, duration: timing.duration, tracks: timelines(), issues: issues)
+            timelineOrigin: timing.origin, duration: timing.duration, tracks: timelines(), issues: issues,
+            interruptions: interruptions.isEmpty ? nil : interruptions)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601

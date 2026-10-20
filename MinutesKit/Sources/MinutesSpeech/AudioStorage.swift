@@ -157,6 +157,57 @@ public enum AudioStorage {
 
     /// Mono AAC: 24 kHz (16 kHz sources stay 16 kHz) keeps speech clear for
     /// playback and is above the 16 kHz that recognition and diarization use.
+    /// Joins recordings end to end as one mono AAC file (Continue Recording) and
+    /// returns where each source starts in the result, in seconds.
+    public static func join(_ sources: [URL], to destination: URL) throws -> [Double] {
+        guard !sources.isEmpty, let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false),
+              let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_192) else { throw StorageError.verificationFailed(destination.lastPathComponent) }
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".joining-" + destination.lastPathComponent)
+        try? FileManager.default.removeItem(at: temporary)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        var offsets: [Double] = []
+        var expected = 0.0
+        try autoreleasepool {
+            let output = try AVAudioFile(forWriting: temporary, settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 24_000, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 48_000,
+            ], commonFormat: .pcmFormatFloat32, interleaved: false)
+            for source in sources {
+                // Source durations, not the encoder's buffered length, mark where each part starts.
+                offsets.append(expected)
+                let input = try AVAudioFile(forReading: source)
+                expected += Double(input.length) / input.processingFormat.sampleRate
+                guard let converter = AVAudioConverter(from: input.processingFormat, to: format),
+                      let inputBuffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 8_192) else {
+                    throw StorageError.verificationFailed(source.lastPathComponent)
+                }
+                converter.downmix = true
+                while true {
+                    var conversionError: NSError?
+                    var readError: Error?
+                    let status = converter.convert(to: outputBuffer, error: &conversionError) { requested, inputStatus in
+                        do {
+                            if input.framePosition >= input.length { inputStatus.pointee = .endOfStream; return nil }
+                            try input.read(into: inputBuffer, frameCount: AVAudioFrameCount(min(Int64(8_192), Int64(requested), input.length - input.framePosition)))
+                            inputStatus.pointee = .haveData
+                            return inputBuffer
+                        } catch { readError = error; inputStatus.pointee = .endOfStream; return nil }
+                    }
+                    if let readError { throw readError }
+                    if status == .error { throw conversionError ?? StorageError.verificationFailed(source.lastPathComponent) }
+                    if outputBuffer.frameLength > 0 { try output.write(from: outputBuffer) }
+                    if status == .endOfStream { break }
+                }
+            }
+        }
+        let check = try AVAudioFile(forReading: temporary)
+        guard abs(Double(check.length) / check.processingFormat.sampleRate - expected) <= max(0.5, expected * 0.002) else {
+            throw StorageError.verificationFailed(destination.lastPathComponent)
+        }
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: temporary, to: destination)
+        return offsets
+    }
+
     static func encode(_ source: URL, to destination: URL) throws {
         let input = try AVAudioFile(forReading: source)
         let rate = min(24_000, input.processingFormat.sampleRate)

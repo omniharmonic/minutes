@@ -231,6 +231,10 @@ public final class AppState: ObservableObject {
     private let captureMetrics: () -> (duration: Double, level: Float, error: String?)
     private let captureNotice: () -> String?
     private var lastCaptureNotice: String?
+    /// Set by Continue Recording: the meeting the next recording is appended to.
+    var continuationTargetID: String?
+    /// Seconds already recorded in the continued meeting, so moments land in the right place.
+    var continuationOffset: Double = 0
     public var recordingRouteNotice: String? { lastCaptureNotice }
     let classifyMeetingFolder: @Sendable (FolderClassificationInput, [FolderClassificationCandidate]) async -> FolderClassificationResult
     private let summarizeMeeting: @Sendable (Meeting, [Utterance], [Person], SummaryTemplate, Bool) async throws -> MeetingSummary
@@ -372,6 +376,10 @@ public final class AppState: ObservableObject {
             let duration = Date().timeIntervalSince(started)
             self.recordingMeter.update(duration: duration, level: nil)
             self.publishRecordingDuration(duration)
+            if let notice = self.systemRecorder.recoveryNotice, notice != self.lastCaptureNotice {
+                self.lastCaptureNotice = notice
+                self.statusMessage = notice
+            }
             if self.systemRecorder.captureError != nil { Task { await self.stopAndProcessMeeting() } }
         }
         loadInitialData(); selectMeeting(id: id)
@@ -896,7 +904,8 @@ public final class AppState: ObservableObject {
     }
 
     public func stopAndProcessMeeting() async {
-        guard isRecording, !isFinalizingRecording, let mId = recordingMeetingId else { return }
+        guard isRecording, !isFinalizingRecording, let recordedID = recordingMeetingId else { return }
+        var mId = recordedID
         isFinalizingRecording = true
         defer { isFinalizingRecording = false }
         isRecording = false
@@ -910,7 +919,8 @@ public final class AppState: ObservableObject {
         let routeNotice = lastCaptureNotice ?? captureNotice()
         defer { if let routeNotice { statusMessage += " " + routeNotice } }
         defer { activeRecordingURL = nil; recordingMeetingId = nil; recordingUsesSystem = false; recordingPlaceholderTitle = nil; activeCaptureMode = nil }
-        let audioURL: URL
+        var audioURL: URL
+        var interruptions: [String] = []
         do {
             #if os(macOS)
             if recordingUsesSystem {
@@ -918,6 +928,7 @@ public final class AppState: ObservableObject {
                 captureSourceDirectory = result.directory
                 guard let mixed = result.processingURL else { throw CaptureFinalizationError(result: result) }
                 audioURL = mixed
+                interruptions = result.interruptions
             } else {
                 guard let recordedURL = try captureStop() else { throw ASRError.audioUnreadable("Recorder did not return a finalized audio file") }
                 audioURL = recordedURL
@@ -945,6 +956,15 @@ public final class AppState: ObservableObject {
             selectMeeting(id: mId)
             return
         }
+        if let target = continuationTargetID {
+            continuationTargetID = nil
+            do {
+                audioURL = try await joinContinuation(recordedMeetingID: mId, recordedAudio: audioURL, into: target)
+                mId = target
+            } catch {
+                statusMessage = "The continued part is saved as its own meeting; joining it failed: \(error.localizedDescription)"
+            }
+        }
 
         isProcessing = true
         isFinalizingRecording = false
@@ -962,6 +982,10 @@ public final class AppState: ObservableObject {
                 _ = try persistProcessingState(meetingId: mId, status: "needs_review", result: result)
                 await completeRecordedMeeting(meetingID: mId, placeholderTitle: placeholderTitle)
                 appendCoverageNotice(result)
+                if !interruptions.isEmpty {
+                    statusMessage += " Saved with interruptions: " + interruptions.prefix(3).joined(separator: " ")
+                        + " To record more, choose Continue Recording in the ⋯ menu."
+                }
                 scheduleAudioCompaction(meetingID: mId)
                 await automaticallyFileMeeting(id: mId)
             } catch {
@@ -1500,5 +1524,74 @@ public final class AppState: ObservableObject {
         }
     }
 
+}
+
+// MARK: - Continue Recording
+
+extension AppState {
+    /// A meeting recorded on this device with saved audio can take more recording.
+    public func canContinueRecording(_ meeting: Meeting) -> Bool {
+        guard meeting.platform != "transcript_import", let path = meeting.audioPath,
+              FileManager.default.fileExists(atPath: path), meeting.id != recordingMeetingId else { return false }
+        return !isRecording && !isProcessing && !isStartingRecording && !isFinalizingRecording
+    }
+
+    /// Records more of an existing meeting: the new audio is appended when it
+    /// stops and the whole meeting is transcribed again; notes are kept.
+    public func continueRecording(meetingID: String) async {
+        guard let meeting = store.getMeeting(id: meetingID), canContinueRecording(meeting) else { return }
+        guard await prepareRecording() else { return }
+        continuationTargetID = meetingID
+        continuationOffset = (try? await Self.finalizedAudioDuration(URL(fileURLWithPath: meeting.audioPath!))) ?? 0
+        #if os(macOS)
+        if meeting.platform == "system_audio" || captureMode != .microphone {
+            await startSystemMeeting(event: nil, includeMicrophone: captureMode != .systemAudio)
+        } else { startQuickMeeting() }
+        #else
+        startQuickMeeting()
+        #endif
+        guard isRecording || isStartingRecording, let partID = recordingMeetingId else { continuationTargetID = nil; return }
+        recordingPlaceholderTitle = nil
+        if var part = store.getMeeting(id: partID) {
+            part.title = "Continuing “\(meeting.title)”"
+            try? store.saveMeeting(part)
+            if let index = meetings.firstIndex(where: { $0.id == partID }) { meetings[index] = part }
+            if currentMeeting?.id == partID { currentMeeting = part }
+        }
+        #if os(iOS)
+        // Stay on the meeting being continued; its page shows the recorder.
+        selectMeeting(id: meetingID)
+        #endif
+        statusMessage = "Continuing “\(meeting.title)”. The new audio is added to it when you stop."
+    }
+
+    /// Appends the just-recorded part to the target meeting's audio, moves the
+    /// part's moments over (shifted by the earlier length) and removes the part.
+    func joinContinuation(recordedMeetingID: String, recordedAudio: URL, into targetID: String) async throws -> URL {
+        guard var target = store.getMeeting(id: targetID), let previousPath = target.audioPath,
+              FileManager.default.fileExists(atPath: previousPath) else { throw CocoaError(.fileNoSuchFile) }
+        let directory = managedAudioDirectory.appendingPathComponent("\(targetID)-continued-\(UUID().uuidString.prefix(6).lowercased())", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("joined.m4a")
+        let sources = [URL(fileURLWithPath: previousPath), recordedAudio]
+        let offsets = try await Task.detached(priority: .userInitiated) { try AudioStorage.join(sources, to: destination) }.value
+        let offset = offsets.count > 1 ? offsets[1] : continuationOffset
+        for moment in store.listBookmarks(meetingId: recordedMeetingID) {
+            try store.saveBookmark(Bookmark(meetingId: targetID, timestamp: moment.timestamp + offset, label: moment.label, createdAt: moment.createdAt))
+            try store.deleteBookmark(id: moment.id)
+        }
+        // The part's own meeting and audio are no longer needed once the join is verified.
+        _ = try? AudioStorage.deleteMeetingAudio(id: recordedMeetingID, store: store, managedDirectory: managedAudioDirectory)
+        try? store.deleteMeeting(id: recordedMeetingID)
+        if AudioStorage.isManaged(audioPath: previousPath, managedDirectory: managedAudioDirectory) {
+            try? AudioStorage.deleteAudio(audioPath: previousPath, managedDirectory: managedAudioDirectory)
+        }
+        target.audioPath = destination.path
+        target.status = "recorded"
+        try store.saveMeeting(target)
+        meetings = store.listMeetings()
+        selectedMeetingId = targetID
+        return destination
+    }
 }
 #endif

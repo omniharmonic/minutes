@@ -8,6 +8,8 @@ import CoreMedia
 @MainActor public protocol SystemAudioRecording: AnyObject {
     var captureError: String? { get }
     var capturing: Bool { get }
+    /// The latest device change the recording recovered from, for the UI.
+    var recoveryNotice: String? { get }
     func startRecording(to directory: URL, includeMicrophone: Bool) async throws
     func stopRecording() async throws -> SynchronizedCaptureResult
 }
@@ -23,6 +25,16 @@ import CoreMedia
     public private(set) var capturing = false
     public private(set) var recordingDirectory: URL?
     public var captureError: String? { archive?.errorDescription }
+    public private(set) var recoveryNotice: String?
+    /// The person asked for the microphone; it may be temporarily absent.
+    private var wantsMicrophone = false
+    private var microphoneActive = false
+    private var microphoneName: String?
+    private var display: SCDisplay?
+    private var monitor: Task<Void, Never>?
+    private var streamStopped = false
+    private var restartFailures = 0
+    private var lastRestart = Date.distantPast
     public init() {}
 
     public func startRecording(to directory: URL, includeMicrophone: Bool = true) async throws {
@@ -33,42 +45,24 @@ import CoreMedia
         if includeMicrophone && AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             throw SynchronizedCaptureArchive.failure("Allow microphone access before starting system + microphone capture.")
         }
-        let microphoneDeviceID: String?
-        if includeMicrophone {
-            guard let microphone = AVCaptureDevice.default(for: .audio) else {
-                throw SynchronizedCaptureArchive.failure("No microphone input device is available. Select an input in System Settings > Sound, then start a new recording.")
-            }
-            microphoneDeviceID = microphone.uniqueID
-        } else { microphoneDeviceID = nil }
+        if includeMicrophone && AVCaptureDevice.default(for: .audio) == nil {
+            throw SynchronizedCaptureArchive.failure("No microphone input device is available. Select an input in System Settings > Sound, then start a new recording.")
+        }
         transitioning = true
         defer { transitioning = false }
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         guard let display = content.displays.first else { throw SynchronizedCaptureArchive.failure("No shareable display is available for system audio capture.") }
         let archive = try SynchronizedCaptureArchive(directory: directory, includeMicrophone: includeMicrophone)
         self.archive = archive
+        self.display = display
         recordingDirectory = directory
-        let output = CaptureStreamOutput(archive: archive)
-        let configuration = SCStreamConfiguration()
-        configuration.capturesAudio = true
-        configuration.captureMicrophone = includeMicrophone
-        // Bind this recording to the selected device instead of silently following
-        // default-input route changes (for example an AirPods disconnect).
-        if let microphoneDeviceID { configuration.microphoneCaptureDeviceID = microphoneDeviceID }
-        configuration.excludesCurrentProcessAudio = true
-        configuration.sampleRate = 48_000
-        configuration.channelCount = 2
-        configuration.width = display.width
-        configuration.height = display.height
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-        let filter = SCContentFilter(display: display, excludingWindows: [])
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
+        wantsMicrophone = includeMicrophone
+        recoveryNotice = nil
+        restartFailures = 0
         do {
-            try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: queue)
-            if includeMicrophone { try stream.addStreamOutput(output, type: .microphone, sampleHandlerQueue: queue) }
-            self.stream = stream
-            self.output = output
-            try await stream.startCapture()
+            try await openStream(archive: archive)
             capturing = true
+            startMonitoring()
         } catch {
             archive.recordFailure("System capture could not start: \(error.localizedDescription)")
             self.stream = nil
@@ -78,10 +72,95 @@ import CoreMedia
         }
     }
 
+    /// One SCStream for Mac audio and, when available, the current default microphone.
+    /// Restarts reuse the same archive, so the recording continues on the same clock.
+    private func openStream(archive: SynchronizedCaptureArchive) async throws {
+        guard let display else { throw SynchronizedCaptureArchive.failure("No shareable display is available for system audio capture.") }
+        let microphone = wantsMicrophone && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? AVCaptureDevice.default(for: .audio) : nil
+        let output = CaptureStreamOutput(archive: archive) { [weak self] in
+            Task { @MainActor in self?.streamStopped = true }
+        }
+        let configuration = SCStreamConfiguration()
+        configuration.capturesAudio = true
+        configuration.captureMicrophone = microphone != nil
+        // Bind to the chosen device; a later route change is handled by restarting
+        // with the then-current device rather than silently mixing devices.
+        if let microphone { configuration.microphoneCaptureDeviceID = microphone.uniqueID }
+        configuration.excludesCurrentProcessAudio = true
+        configuration.sampleRate = 48_000
+        configuration.channelCount = 2
+        configuration.width = display.width
+        configuration.height = display.height
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
+        try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: queue)
+        if microphone != nil { try stream.addStreamOutput(output, type: .microphone, sampleHandlerQueue: queue) }
+        self.stream = stream
+        self.output = output
+        try await stream.startCapture()
+        streamStopped = false
+        microphoneActive = microphone != nil
+        microphoneName = microphone?.localizedName
+    }
+
+    /// Watches for a stopped stream, a microphone that stopped delivering, or a
+    /// microphone that came back, and restarts capture to follow the change.
+    private func startMonitoring() {
+        monitor?.cancel()
+        monitor = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.capturing, !self.transitioning, let archive = self.archive else { continue }
+                if archive.errorDescription != nil { return }
+                // A restarted source needs a moment to deliver before its old gap stops counting as a stall.
+                let settled = Date().timeIntervalSince(self.lastRestart) > 6
+                let stalled = settled ? archive.stalledSource(ignoringMicrophone: !self.microphoneActive) : nil
+                let microphoneReturned = settled && self.wantsMicrophone && !self.microphoneActive && AVCaptureDevice.default(for: .audio) != nil
+                guard self.streamStopped || stalled != nil || microphoneReturned else { continue }
+                // Back off between attempts; give up after repeated failures.
+                guard Date().timeIntervalSince(self.lastRestart) >= min(8, pow(2, Double(self.restartFailures))) else { continue }
+                await self.restart(reason: self.streamStopped ? "stream" : (stalled == .microphone ? "microphone" : (stalled == .system ? "system" : "returned")))
+            }
+        }
+    }
+
+    private func restart(reason: String) async {
+        guard let archive, capturing, !transitioning else { return }
+        transitioning = true
+        defer { transitioning = false }
+        lastRestart = Date()
+        let previousMicrophone = microphoneName
+        if let stream { try? await stream.stopCapture() }
+        await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+        stream = nil; output = nil
+        do {
+            try await openStream(archive: archive)
+            restartFailures = 0
+            let notice: String
+            if wantsMicrophone && !microphoneActive {
+                notice = "\(previousMicrophone ?? "The microphone") isn't available, so Minutes is recording Mac audio only until a microphone returns."
+            } else if reason == "returned" || previousMicrophone != microphoneName, let microphoneName {
+                notice = previousMicrophone == nil ? "Microphone is back: recording \(microphoneName) again." : "\(previousMicrophone ?? "The microphone") disconnected; now recording \(microphoneName)."
+            } else {
+                notice = "Recording paused briefly and resumed."
+            }
+            recoveryNotice = notice
+            archive.recordInterruption(notice)
+        } catch {
+            restartFailures += 1
+            recoveryNotice = "Trying to resume recording… (\(error.localizedDescription))"
+            if restartFailures >= 5 {
+                archive.requestStop("Recording stopped because audio capture could not be restarted after a device change.")
+            }
+        }
+    }
+
     public func stopRecording() async throws -> SynchronizedCaptureResult {
         guard !transitioning, let archive else { throw SynchronizedCaptureArchive.failure("No system recording is ready to stop.") }
+        monitor?.cancel(); monitor = nil
         transitioning = true
-        defer { transitioning = false; capturing = false; stream = nil; output = nil }
+        defer { transitioning = false; capturing = false; stream = nil; output = nil; display = nil }
         if let stream {
             do { try await stream.stopCapture() }
             catch { archive.recordFailure("System capture could not stop cleanly: \(error.localizedDescription)") }
@@ -95,10 +174,13 @@ import CoreMedia
 /// Framework delegate callbacks are serialized by `queue`; archive state is locked.
 final class CaptureStreamOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let archive: SynchronizedCaptureArchive
-    init(archive: SynchronizedCaptureArchive) { self.archive = archive }
+    private let onStop: @Sendable () -> Void
+    init(archive: SynchronizedCaptureArchive, onStop: @escaping @Sendable () -> Void = {}) { self.archive = archive; self.onStop = onStop }
 
+    /// A device change (for example AirPods moving to another device) stops the
+    /// stream; the service restarts it, so this is not a recording failure.
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        archive.recordFailure("System capture stopped unexpectedly: \(error.localizedDescription)")
+        onStop()
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {

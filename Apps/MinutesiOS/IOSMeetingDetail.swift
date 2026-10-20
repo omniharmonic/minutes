@@ -22,7 +22,7 @@ struct IOSMeetingDetail: View {
             else if let meeting = state.currentMeeting, meeting.id == meetingID {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        if (showsRecording || state.activeRecordingMeetingID == meetingID) && (state.isRecording || state.isStartingRecording || state.isPreparingRecording) {
+                        if (showsRecording || state.activeRecordingMeetingID == meetingID || state.continuationTargetID == meetingID) && (state.isRecording || state.isStartingRecording || state.isPreparingRecording) {
                             IOSRecordingWorkspace(state: state)
                             Divider().padding(.vertical, 8)
                         }
@@ -124,6 +124,11 @@ struct IOSMeetingDetail: View {
                         }.disabled(state.parachuteVault == nil || state.parachuteBusy)
                         if let path = state.currentMeeting?.audioPath, FileManager.default.fileExists(atPath: path) {
                             ShareLink(item: URL(fileURLWithPath: path)) { Label("Share Audio", systemImage: "waveform") }
+                        }
+                    }
+                    if let meeting = state.currentMeeting, meeting.id == meetingID, state.canContinueRecording(meeting) {
+                        Button("Continue Recording", systemImage: "record.circle") {
+                            Task { await state.continueRecording(meetingID: meetingID) }
                         }
                     }
                     Section {

@@ -112,17 +112,22 @@ struct SynchronizedCaptureTests {
         #expect(try AVAudioFile(forReading: result.systemAudioURL).processingFormat.channelCount == 2)
     }
 
-    @Test("A missing selected microphone cannot silently become a successful system-only recording")
+    @Test("A missing microphone still saves and mixes the Mac audio, and says so")
     func missingMicrophone() throws {
         let root = location(); defer { try? FileManager.default.removeItem(at: root) }
         let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: true)
         try archive.append(buffer([0.2, 0.3]), source: .system, presentationTime: CMTime(value: 1, timescale: 1))
-        do { _ = try archive.finish(); Issue.record("Missing microphone reported success") }
-        catch let failure as CaptureFinalizationError {
-            #expect(failure.result.processingURL == nil)
-            #expect(failure.result.issues.contains { $0.contains("No microphone") })
-            #expect(try samples(failure.result.systemAudioURL).count == 2)
-        }
+        let result = try archive.finish()
+        #expect(result.processingURL != nil && result.issues.isEmpty)
+        #expect(result.interruptions.contains { $0.contains("No microphone audio") })
+        #expect(try samples(result.systemAudioURL).count == 2)
+    }
+
+    @Test("Nothing captured at all is the one case that cannot become a recording")
+    func nothingCaptured() throws {
+        let root = location(); defer { try? FileManager.default.removeItem(at: root) }
+        let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: true)
+        #expect(throws: CaptureFinalizationError.self) { try archive.finish() }
     }
 
     @Test("Backward source clocks preserve the captured prefix and fail finalization")
@@ -155,19 +160,22 @@ struct SynchronizedCaptureTests {
         }
     }
 
-    @Test("A device-format change keeps the original prefix and cannot claim success")
+    @Test("A replacement device with another sample rate is converted and the recording continues")
     func formatChange() throws {
         let root = location(); defer { try? FileManager.default.removeItem(at: root) }
-        let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: false)
-        try archive.append(buffer([0.1, 0.2]), source: .system, presentationTime: CMTime(value: 1, timescale: 1))
-        #expect(throws: (any Error).self) {
-            try archive.append(buffer([0.4], rate: 44_100), source: .system, presentationTime: CMTime(value: 2, timescale: 1))
-        }
-        #expect(throws: CaptureFinalizationError.self) { try archive.finish() }
-        #expect(try samples(root.appendingPathComponent("system.caf")).count == 2)
+        let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: true)
+        try archive.append(buffer(Array(repeating: 0.1, count: 48_000)), source: .system, presentationTime: CMTime(value: 100, timescale: 1))
+        try archive.append(buffer(Array(repeating: 0.2, count: 24_000), rate: 48_000), source: .microphone, presentationTime: CMTime(value: 100, timescale: 1))
+        // The AirPods are gone; the built-in microphone delivers 44.1 kHz from the same moment.
+        try archive.append(buffer(Array(repeating: 0.3, count: 22_050), rate: 44_100), source: .microphone, presentationTime: CMTime(value: 1005, timescale: 10))
+        let result = try archive.finish()
+        #expect(result.processingURL != nil)
+        let microphone = try AVAudioFile(forReading: #require(result.microphoneURL))
+        #expect(microphone.processingFormat.sampleRate == 48_000)
+        #expect(abs(Double(microphone.length) - 48_000) < 600)
     }
 
-    @Test("A requested microphone ending early fails before rendering and preserves its captured prefix")
+    @Test("A microphone that ends early is kept, mixed with Mac audio, and disclosed")
     func rejectsTruncatedMicrophone() throws {
         let root = location(); defer { try? FileManager.default.removeItem(at: root) }
         let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: true)
@@ -175,10 +183,10 @@ struct SynchronizedCaptureTests {
                            presentationTime: CMTime(value: 100, timescale: 1))
         try archive.append(buffer(Array(repeating: 0.3, count: 24_000), rate: 24_000), source: .microphone,
                            presentationTime: CMTime(value: 100, timescale: 1))
-        try expectIncomplete(archive, root: root, issue: "microphone", preservedMicFrames: 24_000)
+        try expectInterrupted(archive, root: root, issue: "Microphone audio stopped at", preservedMicFrames: 24_000)
     }
 
-    @Test("A late microphone start cannot be mistaken for complete capture")
+    @Test("A late microphone start is disclosed with its time")
     func rejectsLateMicrophone() throws {
         let root = location(); defer { try? FileManager.default.removeItem(at: root) }
         let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: true)
@@ -186,10 +194,10 @@ struct SynchronizedCaptureTests {
                            presentationTime: CMTime(value: 100, timescale: 1))
         try archive.append(buffer(Array(repeating: 0.3, count: 48_000)), source: .microphone,
                            presentationTime: CMTime(value: 103, timescale: 1))
-        try expectIncomplete(archive, root: root, issue: "microphone", preservedMicFrames: 48_000)
+        try expectInterrupted(archive, root: root, issue: "Microphone audio started at 0:03", preservedMicFrames: 48_000)
     }
 
-    @Test("A source callback dropout is preserved as an incomplete capture rather than silent success")
+    @Test("A source dropout becomes silence and is listed with its times")
     func rejectsInternalDropout() throws {
         let root = location(); defer { try? FileManager.default.removeItem(at: root) }
         let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: false)
@@ -197,10 +205,10 @@ struct SynchronizedCaptureTests {
                            presentationTime: CMTime(value: 100, timescale: 1))
         try archive.append(buffer(Array(repeating: 0.3, count: 480)), source: .system,
                            presentationTime: CMTime(value: 101, timescale: 1))
-        try expectIncomplete(archive, root: root, issue: "system")
+        try expectInterrupted(archive, root: root, issue: "Mac audio is missing from 0:00 to 0:01")
     }
 
-    @Test("Many individually short gaps cannot conceal sustained missing source coverage")
+    @Test("Many individually short gaps are still disclosed in total")
     func rejectsAccumulatedDropouts() throws {
         let root = location(); defer { try? FileManager.default.removeItem(at: root) }
         let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: false)
@@ -208,7 +216,7 @@ struct SynchronizedCaptureTests {
             try archive.append(buffer(Array(repeating: 0.2, count: 480)), source: .system,
                                presentationTime: CMTime(value: Int64(10_000 + index * 21), timescale: 100))
         }
-        try expectIncomplete(archive, root: root, issue: "system")
+        try expectInterrupted(archive, root: root, issue: "brief dropouts")
     }
 
     @Test("Small startup and shutdown skew remain valid with silent microphone samples")
@@ -224,7 +232,7 @@ struct SynchronizedCaptureTests {
         #expect(result.processingURL != nil)
     }
 
-    @Test("Missing requested sources receive a short startup grace before a live failure")
+    @Test("A missing source is reported as stalled after a short startup grace")
     func liveStartupGrace() throws {
         for missing in [CaptureAudioSource.microphone, .system] {
             let root = location(); defer { try? FileManager.default.removeItem(at: root) }
@@ -235,14 +243,14 @@ struct SynchronizedCaptureTests {
             #expect(archive.errorDescription == nil)
             try archive.append(buffer(Array(repeating: 0, count: 480)), source: peer,
                                presentationTime: CMTime(value: 103, timescale: 1))
-            let message = try #require(archive.errorDescription)
-            #expect(message.contains(missing.rawValue))
-            #expect(message.contains("stopped delivering audio"))
-            #expect(throws: CaptureFinalizationError.self) { try archive.finish() }
+            // A stall asks the capture service to restart that source; it is not a failure.
+            #expect(archive.stalledSource() == missing)
+            #expect(archive.errorDescription == nil)
+            #expect(try archive.finish().processingURL != nil)
         }
     }
 
-    @Test("An active microphone dropout becomes a sticky live error with a recoverable checkpoint")
+    @Test("A microphone dropout is detected as a stall, recovers when audio returns, and is disclosed")
     func liveMicrophoneDropout() throws {
         let root = location(); defer { try? FileManager.default.removeItem(at: root) }
         let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: true)
@@ -250,25 +258,32 @@ struct SynchronizedCaptureTests {
                            presentationTime: CMTime(value: 100, timescale: 1))
         try archive.append(buffer(Array(repeating: 0, count: 24_000), rate: 24_000), source: .microphone,
                            presentationTime: CMTime(value: 100, timescale: 1))
-        #expect(archive.errorDescription == nil)
-        try archive.append(buffer(Array(repeating: 0, count: 48_000 * 3)), source: .system,
+        #expect(archive.stalledSource() == nil)
+        try archive.append(buffer(Array(repeating: 0, count: 48_000 * 4)), source: .system,
                            presentationTime: CMTime(value: 101, timescale: 1))
-        #expect(archive.errorDescription == nil)
-        try archive.append(buffer(Array(repeating: 0, count: 480)), source: .system,
+        #expect(archive.stalledSource() == .microphone)
+        #expect(archive.stalledSource(ignoringMicrophone: true) == nil)
+        archive.recordInterruption("AirPods disconnected; now recording MacBook Pro Microphone.")
+        // The replacement microphone delivers again from 104 s.
+        try archive.append(buffer(Array(repeating: 0, count: 24_000), rate: 24_000), source: .microphone,
                            presentationTime: CMTime(value: 104, timescale: 1))
-        let message = try #require(archive.errorDescription)
-        #expect(message.contains("microphone stopped delivering audio"))
-        #expect(message.contains("selected input device"))
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-        let checkpoint = try decoder.decode(CaptureTimelineManifest.self, from: Data(contentsOf: root.appendingPathComponent("capture.json")))
-        #expect(!checkpoint.completed)
-        #expect(checkpoint.issues.contains(message))
-        #expect(throws: (any Error).self) {
-            try archive.append(buffer([0], rate: 24_000), source: .microphone,
-                               presentationTime: CMTime(value: 104, timescale: 1))
-        }
-        #expect(archive.errorDescription == message)
-        try expectIncomplete(archive, root: root, issue: "microphone", preservedMicFrames: 24_000)
+        #expect(archive.errorDescription == nil)
+        let result = try archive.finish()
+        #expect(result.processingURL != nil)
+        #expect(result.interruptions.contains { $0.contains("AirPods disconnected") })
+        #expect(result.interruptions.contains { $0.contains("Microphone audio is missing from 0:01 to 0:04") })
+    }
+
+    @Test("A requested stop still mixes everything captured")
+    func requestedStop() throws {
+        let root = location(); defer { try? FileManager.default.removeItem(at: root) }
+        let archive = try SynchronizedCaptureArchive(directory: root, includeMicrophone: false)
+        try archive.append(buffer(Array(repeating: 0.2, count: 4_800)), source: .system, presentationTime: CMTime(value: 1, timescale: 1))
+        archive.requestStop("Recording stopped because audio capture could not be restarted after a device change.")
+        #expect(archive.errorDescription?.contains("could not be restarted") == true)
+        let result = try archive.finish()
+        #expect(result.processingURL != nil)
+        #expect(result.interruptions.contains { $0.contains("could not be restarted") })
     }
 
     @Test("Continuous silent callbacks keep requested sources healthy")
@@ -286,24 +301,19 @@ struct SynchronizedCaptureTests {
         #expect(try archive.finish().issues.isEmpty)
     }
 
-    private func expectIncomplete(_ archive: SynchronizedCaptureArchive, root: URL,
-                                  issue: String, preservedMicFrames: AVAudioFramePosition? = nil) throws {
-        do { _ = try archive.finish(); Issue.record("Missing source coverage reported success") }
-        catch let failure as CaptureFinalizationError {
-            #expect(failure.result.processingURL == nil)
-            #expect(failure.result.issues.contains { $0.contains(issue) && $0.contains("coverage") })
-            #expect(FileManager.default.fileExists(atPath: failure.result.systemAudioURL.path))
-            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("mixed.caf").path))
-            if let preservedMicFrames {
-                #expect(try AVAudioFile(forReading: #require(failure.result.microphoneURL)).length == preservedMicFrames)
-            }
-            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-            let manifest = try decoder.decode(CaptureTimelineManifest.self, from: Data(contentsOf: failure.result.manifestURL))
-            #expect(!manifest.completed)
-            #expect(manifest.processingFile == nil)
-            #expect(!manifest.issues.isEmpty)
-            #expect(throws: CaptureFinalizationError.self) { try archive.finish() }
+    private func expectInterrupted(_ archive: SynchronizedCaptureArchive, root: URL,
+                                   issue: String, preservedMicFrames: AVAudioFramePosition? = nil) throws {
+        let result = try archive.finish()
+        #expect(result.issues.isEmpty)
+        #expect(result.interruptions.contains { $0.contains(issue) }, "\(result.interruptions)")
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("mixed.caf").path))
+        if let preservedMicFrames {
+            #expect(try AVAudioFile(forReading: #require(result.microphoneURL)).length == preservedMicFrames)
         }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(CaptureTimelineManifest.self, from: Data(contentsOf: result.manifestURL))
+        #expect(manifest.completed)
+        #expect(manifest.interruptions?.contains { $0.contains(issue) } == true)
     }
 
     @Test("An existing recording directory is never overwritten")

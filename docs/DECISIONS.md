@@ -139,3 +139,13 @@ Implemented the researched approach in a new `MinutesSync` module. A meeting is 
 ## 2026-10-20: Sparkle updates from a public releases repository
 
 The owner approved an update checker. Sparkle is the Mac standard: updates are EdDSA-signed (private key only in the owner's Keychain) and notarized, and Sparkle asks the person on second launch before checking automatically. That keeps the only new network request opt-in, consistent with local-first. The feed is `appcast.xml` on the main branch of `omniharmonic/minutes-releases`; downloads are GitHub release assets, and each release also carries `Minutes.zip`, so `releases/latest/download/Minutes.zip` always works.
+
+## 2026-10-20: Recordings survive device changes; gaps are disclosed, not fatal
+
+The earlier rule refused to mix a capture with any coverage gap, so silence could never mask a missing source. In practice it lost whole meetings. When the owner moved AirPods to their phone mid-call, the microphone vanished, ScreenCaptureKit stopped the stream, and the meeting was marked failed: the audio was kept but never transcribed.
+
+The system capture service now restarts its stream with the current default microphone, or with Mac audio only when no microphone exists. It switches back once a microphone returns. Backoff up to 8 s applies between attempts, and after 5 failed restarts the service asks the app to stop. A replacement device with another sample rate or layout is converted into the track's format. Finalizing mixes whatever was captured, filling gaps with silence, and lists every gap, late start, early stop, missing source and device change as `interruptions`. These are shown after processing and saved in `capture.json`. Only a capture with no audio at all fails.
+
+**Continue Recording** (meeting ⋯ menu on Mac and iOS) records a new part and, on stop, joins it to the meeting's audio. The joined audio is verified against the parts' total length. Moments from the new part are shifted by the earlier length, the temporary part is removed, and the whole meeting is transcribed again; notes are kept.
+
+Microphone-only capture already restarts its audio engine on route changes and interruptions, and saves what it recorded if it gives up.

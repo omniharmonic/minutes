@@ -108,10 +108,7 @@ public struct MainWindowView: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
-        // The system toolbar search keeps one place at the window's top right in every section.
-        .searchable(text: $search, placement: .toolbar,
-                    prompt: appState.selectedSection == .calendar ? "Search events" : (appState.selectedSection == .voiceprintHub ? "Search people" : "Search meetings"))
-        .searchFocused($searchFocused)
+
         .onPreferenceChange(SidebarWidthPreference.self) { measuredSidebarWidth = $0 }
         .onPreferenceChange(LibraryWidthPreference.self) { measuredLibraryWidth = $0 }
         .overlay(alignment: .leading) {
@@ -267,6 +264,8 @@ public struct MainWindowView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             HStack(spacing: 10) {
+                // Search comes first so it sits in the same place in every section.
+                searchField
                 if appState.selectedSection == .calendar {
                     Button { appState.refreshCalendar() } label: {
                         Image(systemName: "arrow.clockwise").font(.system(size: 15, weight: .medium))
@@ -299,12 +298,38 @@ public struct MainWindowView: View {
         }
     }
 
+    /// A capsule like the iPhone's search bar.
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+            TextField(appState.selectedSection == .calendar ? "Search events" : (appState.selectedSection == .voiceprintHub ? "Search people" : "Search meetings"), text: $search)
+                .textFieldStyle(.plain).font(.system(size: 14))
+                .focused($searchFocused).accessibilityLabel("Search")
+                .onExitCommand { search = ""; searchFocused = false }
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14).frame(width: 260, height: 36)
+        .minutesControlGlass(in: Capsule(), interactive: true)
+        .help("Search (⌥⌘F)")
+    }
+
     @ViewBuilder private func meetingActions(_ meeting: Meeting) -> some View {
         Section("Export") {
             Button("Export Markdown…", systemImage: "doc.badge.arrow.up") { appState.prepareMarkdownExport() }
             Button(appState.parachuteVault.map { "Save to “\($0.vault)”" } ?? "Save to Parachute Vault…", systemImage: "tray.and.arrow.up") {
                 if appState.parachuteVault == nil { openSettings() }
                 else { Task { _ = await appState.exportCurrentMeeting(target: "parachute") } }
+            }
+        }
+        if appState.canContinueRecording(meeting) {
+            Section {
+                Button("Continue Recording", systemImage: "record.circle") {
+                    recorderPresented = true
+                    Task { await appState.continueRecording(meetingID: meeting.id) }
+                }
             }
         }
         Section {
