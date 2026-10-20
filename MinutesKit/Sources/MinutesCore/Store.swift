@@ -1832,6 +1832,14 @@ extension MinutesStore {
         }
     }
 
+    /// The first transcript line, for list previews, without loading the transcript.
+    public func firstUtteranceText(meetingId: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return try? folderStatement("SELECT text FROM utterance WHERE meeting_id=? ORDER BY start, id LIMIT 1", values: [meetingId]) { statement in
+            sqlite3_step(statement) == SQLITE_ROW ? sqlite3_column_text(statement, 0).map { String(cString: $0) } : nil
+        }
+    }
+
     public func isMeetingInTrash(id: String) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         return try folderStatement("SELECT 1 FROM meeting_trash WHERE meeting_id=?", values: [id]) { statement in

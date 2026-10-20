@@ -108,6 +108,10 @@ public struct MainWindowView: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
+        // The system toolbar search keeps one place at the window's top right in every section.
+        .searchable(text: $search, placement: .toolbar,
+                    prompt: appState.selectedSection == .calendar ? "Search events" : (appState.selectedSection == .voiceprintHub ? "Search people" : "Search meetings"))
+        .searchFocused($searchFocused)
         .onPreferenceChange(SidebarWidthPreference.self) { measuredSidebarWidth = $0 }
         .onPreferenceChange(LibraryWidthPreference.self) { measuredLibraryWidth = $0 }
         .overlay(alignment: .leading) {
@@ -271,7 +275,6 @@ public struct MainWindowView: View {
                     .buttonStyle(.plain).disabled(!appState.calendarConnected || appState.googleRefreshing)
                     .help("Refresh calendar").accessibilityLabel("Refresh calendar")
                 }
-                searchField
                 if appState.selectedSection == .meetings, let share = appState.currentShareFile {
                     ShareLink(item: share, preview: SharePreview(appState.currentMeeting?.title ?? "Meeting")) {
                         // The glyph's box sits low in its bounds; lift it to the optical centre.
@@ -294,23 +297,6 @@ public struct MainWindowView: View {
             }
             .fixedSize()
         }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
-            TextField(appState.selectedSection == .calendar ? "Search events" : "Search meetings", text: $search)
-                .textFieldStyle(.plain).font(.system(size: 14))
-                .focused($searchFocused).accessibilityLabel("Search meetings")
-                .onExitCommand { search = ""; searchFocused = false }
-            if !search.isEmpty {
-                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                    .buttonStyle(.plain).accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 14).frame(width: 260, height: 36)
-        .minutesControlGlass(in: Capsule(), interactive: true)
-        .help("Search meetings (⌥⌘F)")
     }
 
     @ViewBuilder private func meetingActions(_ meeting: Meeting) -> some View {
@@ -368,9 +354,10 @@ public struct MainWindowView: View {
         VStack(spacing: 0) {
             libraryHeader.background(MinutesTheme.bg).zIndex(1)
             ScrollViewReader { _ in
-                // A selectable List (not a stack): trackpad swipes reveal row actions
-                // and the table owns click and arrow-key selection.
-                List(selection: $appState.selectedMeetingId) {
+                // Native list selection (clicks, arrow keys, swipes). Rows offer
+                // their drag item through itemProvider, which works with selection;
+                // a tap gesture plus onDrag on each row dropped clicks.
+                List(selection: Binding(get: { appState.selectedMeetingId }, set: { appState.selectedMeetingId = $0 })) {
                     ForEach(MeetingDateGroup.sections(for: filteredMeetings)) { group in
                         Section {
                             ForEach(group.meetings) { meeting in meetingRow(meeting) }
@@ -415,16 +402,12 @@ public struct MainWindowView: View {
             if meeting.status == "failed" { Text("Needs attention").font(.caption).foregroundStyle(.orange) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8).padding(.vertical, 6)
+        .padding(.horizontal, 4).padding(.vertical, 5)
         .contentShape(Rectangle())
-        .tag(meeting.id)
-        .onDrag { MeetingDragTransfer.provider(meetingID: meeting.id) } preview: {
-            Label(meeting.title, systemImage: "note.text").font(.body).lineLimit(2).padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        }
+        .tag(meeting.id as String?)  // must match the String? selection exactly
+        .itemProvider { MeetingDragTransfer.provider(meetingID: meeting.id) }
         .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 12))
         .listRowSeparator(.hidden)
-        .id(meeting.id)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button("Delete", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }.tint(.red)
             Button("Move", systemImage: "folder") { movingMeeting = meeting }.tint(.indigo)
@@ -455,11 +438,13 @@ public struct MainWindowView: View {
     }
     private func preview(_ meeting: Meeting) -> String {
         if let notes = meeting.userNotes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return notes.replacingOccurrences(of: "\n", with: " ") }
-        return appState.store.listUtterances(meetingId: meeting.id).first?.text ?? "No additional text"
+        return appState.store.firstUtteranceText(meetingId: meeting.id) ?? "No additional text"
     }
     private var peopleList: some View {
         List(selection: $personSelection) {
-            ForEach(appState.store.listPeople()) { person in
+            ForEach(appState.store.listPeople().filter { person in
+                search.isEmpty || person.displayName.localizedCaseInsensitiveContains(search) || person.emails.contains { $0.localizedCaseInsensitiveContains(search) }
+            }) { person in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(person.displayName).font(.headline)
                     if let email = person.emails.first { Text(email).font(.subheadline).foregroundStyle(.secondary) }

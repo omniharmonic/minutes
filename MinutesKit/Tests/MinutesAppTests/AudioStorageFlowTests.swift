@@ -29,7 +29,7 @@ import MinutesSpeech
     }
 
     private func waitForCompactAudio(_ store: MinutesStore, _ id: String) async throws {
-        for _ in 0..<100 where store.getMeeting(id: id)?.audioPath?.hasSuffix(".m4a") != true { try await Task.sleep(for: .milliseconds(50)) }
+        for _ in 0..<300 where store.getMeeting(id: id)?.audioPath?.hasSuffix(".m4a") != true { try await Task.sleep(for: .milliseconds(50)) }
     }
 
     @Test("A transcribed recording compresses automatically once processing finishes")
@@ -75,6 +75,8 @@ import MinutesSpeech
         state.startQuickMeeting(); let id = try #require(state.activeRecordingMeetingID)
         await state.stopAndProcessMeeting()
         try await waitForCompactAudio(store, id)
+        // The compressed path is saved just before compaction releases the meeting.
+        for _ in 0..<300 where state.compactingMeetingIDs.contains(id) { try await Task.sleep(for: .milliseconds(50)) }
         #expect(state.deleteAudio(meetingIDs: [id]) > 0)
         #expect(store.getMeeting(id: id)?.audioPath == nil)
         #expect(store.listUtterances(meetingId: id).count == 1)

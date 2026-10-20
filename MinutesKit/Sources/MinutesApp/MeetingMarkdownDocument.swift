@@ -43,22 +43,34 @@ public extension View {
 #if canImport(SwiftUI)
 import CoreTransferable
 import MinutesExport
+import MinutesCore
 
-/// What the system share sheet sends: the meeting as a Markdown file, written
-/// to a temporary location only when the person picks a destination.
+/// What the system share sheet sends: the meeting as a Markdown file. It is
+/// rendered only when the person picks a destination, not on every redraw.
 @available(macOS 15, iOS 18, *)
 public struct MeetingShareFile: Transferable, Sendable {
     public let filename: String
-    public let markdown: String
+    let meetingID: String
+    let store: MinutesStore
+
+    func markdown() -> String {
+        guard let meeting = store.getMeeting(id: meetingID) else { return "" }
+        let clusters = store.listSpeakerClusters(meetingId: meetingID)
+        let bundle = MeetingExportBundle(meeting: meeting, attendees: store.listPeopleForMeeting(meetingId: meetingID), clusters: clusters,
+            utterances: TranscriptSpeakerLabels.readableUtterances(store.listUtterances(meetingId: meetingID), clusters: clusters),
+            summary: store.getSummary(meetingId: meetingID))
+        return MarkdownAdapter.render(bundle: bundle)
+    }
+
     public static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: MeetingMarkdownDocument.writableContentTypes[0]) { file in
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("minutes-share-" + UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let url = directory.appendingPathComponent(file.filename)
-            try Data(file.markdown.utf8).write(to: url, options: .atomic)
+            try Data(file.markdown().utf8).write(to: url, options: .atomic)
             return SentTransferredFile(url)
         }
-        DataRepresentation(exportedContentType: .plainText) { Data($0.markdown.utf8) }
+        DataRepresentation(exportedContentType: .plainText) { Data($0.markdown().utf8) }
     }
 }
 
@@ -67,10 +79,8 @@ public extension AppState {
     /// The selected meeting, ready for the share sheet.
     var currentShareFile: MeetingShareFile? {
         guard let meeting = currentMeeting else { return nil }
-        let bundle = MeetingExportBundle(meeting: meeting, attendees: currentAttendees,
-            clusters: currentClusters, utterances: currentUtterances, summary: currentSummary)
         let title = meeting.title.components(separatedBy: CharacterSet(charactersIn: "/:\\\n\r")).joined(separator: "-")
-        return MeetingShareFile(filename: String(title.prefix(120)) + ".md", markdown: MarkdownAdapter.render(bundle: bundle))
+        return MeetingShareFile(filename: String(title.prefix(120)) + ".md", meetingID: meeting.id, store: store)
     }
 }
 #endif
