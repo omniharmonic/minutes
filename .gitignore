@@ -22,3 +22,4 @@ audit/*.log
 
 # Publisher native registration is injected only into ignored signed products.
 GoogleDesktopClientRegistration.json
+.playwright-mcp/

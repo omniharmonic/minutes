@@ -1,12 +1,24 @@
 # Minutes
 
-Minutes is a native Swift meeting recorder and local processing application, with a shared Swift package and CLI. It is under development. See [STATUS.md](STATUS.md) for implementation evidence and release blockers; unit tests and compilation do not establish real-device reliability or speaker-identification accuracy.
+Minutes records meetings on your Mac or iPhone, transcribes them on device, separates speakers and writes notes, with no Minutes server and no account. It is a native SwiftUI app built on a shared Swift package (`MinutesKit`), with a command-line tool (`minutes-cli`) that exposes every feature.
 
-Current processing uses **Apple Speech with mandatory on-device recognition** and trained **FluidAudio 0.17.7 diarization/WeSpeaker models**. It does not use Parakeet ASR. Models must be installed explicitly; unsupported local recognition and missing models fail with an actionable error. Configured exports can send meeting content to their destination.
+Speech uses **Apple Speech with mandatory on-device recognition**. Speaker separation uses trained **FluidAudio 0.17.7 diarization/WeSpeaker models**, which you install explicitly; nothing downloads silently. Data leaves the device only when you turn on iCloud sync (your own private iCloud database), connect a calendar, or export to a destination you choose. See [the privacy policy](https://minutes.omniharmonic.com/privacy).
 
 ## Download
 
-Signed Mac previews and setup guides are published in [Minutes & StudioLink Downloads](https://github.com/omniharmonic/minutes-studiolink-downloads). Sources stay private. iPhone development installs are paired-device tests, not public App Store/TestFlight distribution. See [release setup](docs/RELEASE_SETUP.md) for known limits.
+- **Mac** (macOS 15+, Apple silicon): [latest release](https://github.com/omniharmonic/minutes-releases/releases/latest). It is notarized and updates itself.
+- **iPhone**: [public TestFlight beta](https://testflight.apple.com/join/jWJ68SJV).
+- Report problems in [minutes-releases issues](https://github.com/omniharmonic/minutes-releases/issues).
+
+[STATUS.md](STATUS.md) is the working log: what's verified and what isn't yet. [AGENTS.md](AGENTS.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explain how the code is organized.
+
+## Building your own copy
+
+Signing uses the publisher's Apple team and iCloud container, so a fork needs its own:
+
+- **Apple signing:** change `DEVELOPMENT_TEAM`, the bundle IDs and the iCloud container (`iCloud.ai.nosaas.minutes`) in `Apps/project.yml`, then run `Apps/generate-project.sh`.
+- **Google Calendar:** the publisher's Google OAuth registration is injected only into signed release builds and is not in this repository. To use Google Calendar in your build, create your own OAuth clients; see [docs/GOOGLE_CALENDAR_SETUP.md](docs/GOOGLE_CALENDAR_SETUP.md). Apple Calendar works without this.
+- **Releases and updates:** `scripts/build-app.sh` and `scripts/publish-release.sh` need your own Developer ID, notarization profile and Sparkle key.
 
 ## Find within a transcript
 
