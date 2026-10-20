@@ -45,42 +45,65 @@ In Cloud Console → Google Auth Platform → Branding, the privacy policy URL i
 
 ## 3. Demo video (owner records)
 
-**Before recording:**
-- Install the current builds (Mac 64+, iOS 60+).
-- Use a Google account that holds no private data, ideally a dedicated demo account. Give it a second calendar named "Team".
-- Create 2–3 events in the coming days on both calendars, with a Meet link and two invitees (they can be addresses you own).
-- In Minutes on the Mac, choose Disconnect so the consent screen appears from the start.
-- Close unrelated windows and turn on Do Not Disturb.
+**Before recording (5 minutes, not filmed):**
+- On the Mac, update Minutes to build 70 (Minutes → Check for Updates).
+- In Google Calendar on the web, create a calendar named **Minutes Demo** (Other calendars → + → Create new calendar).
+  - Add two events to it in the next few days: "Weekly planning" and "Design review".
+  - Give each one a Google Meet link (Add Google Meet video conferencing) and one or two of your own addresses as guests.
+  - With this calendar, the video never shows real meetings or other people's addresses.
+- In Minutes → Settings → Calendar, choose **Disconnect**, so the take starts from the consent screen.
+- In Dia, stay signed in to synergy@benjaminlife.one. A password prompt during the take is fine, but don't show any two-factor codes.
+- Quit or hide Messages, Signal, WhatsApp and Telegram, and turn on Do Not Disturb.
+- Open these Dia tabs in order:
+  1. https://minutes.omniharmonic.com/about
+  2. https://minutes.omniharmonic.com/privacy (scroll to "Google user data")
+  3. Google Calendar, showing the Minutes Demo event
+  4. https://myaccount.google.com/connections
 
-**Recording:**
-- Use macOS screen recording (⇧⌘5 → Record Entire Screen) in **one continuous take with no edits**.
-- Silent video is fine. Talk over it, or add a live caption by typing in a TextEdit window if you prefer.
-- If a password or two-factor step is needed, sign in to the demo account in the browser **before** recording, so the take shows only account selection and consent.
+**Recording the Mac part:**
+- Press **⇧⌘5 → Record Entire Screen → Record**.
+- Make it **one continuous take with no edits**. Go slowly: hold each screen for about 3 seconds.
+- Silent is fine. You can narrate if you like.
 
 **Script (about 4 minutes):**
 
-1. Show https://minutes.omniharmonic.com/about, then the Google section of /privacy.
-2. **Mac client:** open Minutes → Settings → Calendar → Google Calendar → **Connect Google**.
-   - In the browser, choose the demo account. On the consent screen, hold for 3 seconds on the two read-only permissions ("See your calendar list"; "View events on all your calendars"), then **Allow**.
-3. Back in Minutes it shows **Connected**. The new **calendar list** appears with the calendar names ← *calendarlist.readonly*. Tick **Team** next to the main calendar.
-4. Open **Upcoming**. Events from both calendars appear ← *events.readonly*. Click an event to show its title, time, Meet link, organizer, invitees and their RSVP.
-5. Show what the event data does:
-   - Click **Record** on that event. The recording is named after the event; stop it after a few seconds.
-   - Open the recording. Its invitees appear, and in **Speakers** they are offered as names to choose for a speaker. (Optionally show the reminder notification.)
-6. **Show that nothing was written:**
-   - Open the same event in Google Calendar on the web; it is unchanged.
-   - Note that Minutes has no create, edit or delete actions.
-7. **Disconnect:**
-   - Minutes → Settings → Calendar → **Disconnect**.
-   - Open https://myaccount.google.com/connections; Minutes is no longer listed. This shows the source-account effect of revocation.
-8. **iOS client** (same take; the iOS Simulator or iPhone Mirroring are both fine):
-   - Minutes for iPhone → Settings → **Connect Google** → consent screen → Allow.
-   - The calendar list appears; tick Team.
-   - Upcoming → an event's details.
+1. Show the About tab, then scroll the Google section of Privacy.
+2. Switch to Minutes → Settings → Calendar → Google Calendar → **Connect Google**.
+3. In the browser:
+   - choose synergy@benjaminlife.one;
+   - on the consent screen, pause on the two read-only permissions ("See your calendar list" and "View events on all your calendars");
+   - click **Continue / Allow**.
+4. Back in Minutes it says **Connected**, and the calendar list appears. This shows *calendarlist.readonly*.
+   - Untick every calendar except **Minutes Demo**.
+5. Open **Upcoming**. The two demo events appear. This shows *events.readonly*.
+   - Click "Weekly planning" and pause on its title, time, Meet link, organizer, guests and their RSVP status.
+6. Click **Record** on that event and speak a sentence. Stop after about 10 seconds.
+   - The new meeting is named after the event.
+   - Open it, then **Speakers**: the guests are offered as names for the speaker.
+7. Switch to the Google Calendar tab and refresh. The event is unchanged.
+   - Say or show that Minutes has no create, edit or delete actions.
+8. Minutes → Settings → Calendar → **Disconnect**.
+   - Switch to the Google Account connections tab and refresh: Minutes is no longer listed.
+9. Stop the recording with the ⏹ button in the menu bar. The file is saved to the Desktop.
+
+**Recording the iPhone part (a second short take):**
+- On the phone, open Control Center → **Screen Recording**.
+- In Minutes, go to Settings → **Connect Google**: choose the account → consent screen (pause) → Allow.
+- The calendar list appears: tick **Minutes Demo** only.
+- Open **Upcoming** and tap "Weekly planning" to show its details.
+- Stop the recording and AirDrop it to the Mac.
 
 **After recording:**
-- Upload to YouTube as **Unlisted**.
-- Paste the link in Data Access → Demo video, and save.
+- In YouTube Studio, choose Create → Upload videos for each file. Set Visibility to **Unlisted**, with titles "Minutes for Mac – Google Calendar OAuth demo" and "Minutes for iPhone – Google Calendar OAuth demo".
+- In Google Cloud Console (project minutes-511702) → Google Auth Platform → **Data Access**:
+  - paste the Mac link in the demo video field (add the iPhone link to the justification text);
+  - paste the scope justification from section 2;
+  - Save.
+- Under **Verification Center**, use **Prepare for verification** / **Submit**, if Google offers it.
+- Send the reply in section 4, replacing the placeholder with both links.
+- Under **Audience**, check the publishing status:
+  - **In production**: friends can sign in now, but see "Google hasn't verified this app" (Advanced → Go to Minutes) until approval.
+  - **Testing**: only listed test users can sign in. Add your friends' Google addresses there, or choose Publish app.
 
 ## 4. Reply to Google (send after the video link is saved)
 
@@ -92,7 +115,7 @@ In Cloud Console → Google Auth Platform → Branding, the privacy policy URL i
 >    - how Minutes uses Google user data (each scope, the data read and the features that use it);
 >    - with whom it is shared, transferred or disclosed (no one, beyond Google's own API and destinations the user explicitly chooses);
 >    - the protection mechanisms for that data (OAuth with PKCE, tokens only in the device Keychain, TLS, read-only access, on-device storage protected by the operating system, revocation on disconnect).
-> 2. **Demo video:** a new live, uninterrupted recording is linked in the Cloud Console: [UNLISTED YOUTUBE LINK]. It shows:
+> 2. **Demo video:** new live, uninterrupted recordings: Mac client [MAC VIDEO LINK], iOS client [IPHONE VIDEO LINK]. They show:
 >    - the full OAuth consent flow for both the macOS and iOS clients;
 >    - the calendar list (calendar.calendarlist.readonly) used to choose calendars;
 >    - every user-facing feature of calendar.events.readonly: upcoming meetings with titles, times, conference links and invitees, starting a recording named after the event, linking invitees to the meeting and offering them when labelling speakers, and reminders.
