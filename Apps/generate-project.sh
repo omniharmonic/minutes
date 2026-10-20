@@ -9,4 +9,7 @@ if [ "$("$xcodegen_bin" --version)" != "Version: 2.46.0" ]; then
   echo "Use the pinned official XcodeGen 2.46.0 executable via XCODEGEN_BIN." >&2
   exit 1
 fi
-exec "$xcodegen_bin" generate --spec "$apps_dir/project.yml" --project "$apps_dir"
+spec="$apps_dir/project.yml"
+# MINUTES_CLOUDKIT=1 adds the iCloud entitlement (needs the capability on the App ID).
+if [ "${MINUTES_CLOUDKIT:-0}" = "1" ]; then spec="$apps_dir/project-cloudkit.yml"; fi
+exec "$xcodegen_bin" generate --spec "$spec" --project "$apps_dir"

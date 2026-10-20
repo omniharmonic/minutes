@@ -1,0 +1,17 @@
+# iCloud sync build: the base project plus the CloudKit entitlement. Generate
+# with MINUTES_CLOUDKIT=1 ./generate-project.sh once the App ID app.minutes.ios
+# has the iCloud capability with container iCloud.ai.nosaas.minutes.
+include:
+  - project.yml
+targets:
+  MinutesiOS:
+    entitlements:
+      path: MinutesiOS/MinutesiOS.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.ai.nosaas.minutes
+        com.apple.developer.icloud-services:
+          - CloudKit
+    info:
+      properties:
+        MinutesCloudKitContainer: iCloud.ai.nosaas.minutes

@@ -69,6 +69,30 @@ fi
 ENTITLEMENTS="$ROOT_DIR/scripts/Minutes.entitlements"
 SIGNING_IDENTITY="${DEVELOPER_ID_APPLICATION:--}"
 NOTARY_PROFILE="${NOTARYTOOL_PROFILE:-}"
+# iCloud sync needs a Developer ID provisioning profile whose App ID has the
+# iCloud (CloudKit) capability and container. Without one the build ships with
+# sync unavailable rather than an entitlement macOS would refuse to launch.
+CLOUDKIT_PROFILE="${MINUTES_CLOUDKIT_PROFILE:-}"
+CLOUDKIT_CONTAINER="${MINUTES_CLOUDKIT_CONTAINER:-iCloud.ai.nosaas.minutes}"
+if [[ -n "$CLOUDKIT_PROFILE" ]]; then
+    [[ "$SIGNING_IDENTITY" != "-" ]] || { echo "Error: iCloud sync requires DEVELOPER_ID_APPLICATION" >&2; exit 1; }
+    PROFILE_PLIST="$(mktemp -t minutes-profile).plist"
+    security cms -D -i "$CLOUDKIT_PROFILE" > "$PROFILE_PLIST"
+    TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")"
+    /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.icloud-container-identifiers' "$PROFILE_PLIST" | grep -q "$CLOUDKIT_CONTAINER" \
+        || { echo "Error: provisioning profile does not include $CLOUDKIT_CONTAINER" >&2; exit 1; }
+    cp "$CLOUDKIT_PROFILE" "$CONTENTS_DIR/embedded.provisionprofile"
+    CLOUD_ENTITLEMENTS="$(mktemp -t minutes-entitlements).plist"
+    cp "$ENTITLEMENTS" "$CLOUD_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $TEAM_ID.ai.nosaas.minutes" "$CLOUD_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $TEAM_ID" "$CLOUD_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-identifiers array" -c "Add :com.apple.developer.icloud-container-identifiers:0 string $CLOUDKIT_CONTAINER" "$CLOUD_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-services array" -c "Add :com.apple.developer.icloud-services:0 string CloudKit" "$CLOUD_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-environment string Production" "$CLOUD_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Add :MinutesCloudKitContainer string $CLOUDKIT_CONTAINER" "$CONTENTS_DIR/Info.plist"
+    ENTITLEMENTS="$CLOUD_ENTITLEMENTS"
+    echo "==> iCloud sync enabled with container $CLOUDKIT_CONTAINER"
+fi
 if [[ -n "$NOTARY_PROFILE" && "$SIGNING_IDENTITY" == "-" ]]; then
     echo "Error: Notarization requires DEVELOPER_ID_APPLICATION; an ad-hoc build cannot be notarized." >&2
     exit 1

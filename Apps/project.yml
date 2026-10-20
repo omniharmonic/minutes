@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "57"
+    CURRENT_PROJECT_VERSION: "58"
     DEVELOPMENT_TEAM: 83Y42N33H8
     GOOGLE_REVERSED_CLIENT_ID: com.googleusercontent.apps.618880165655-h7cgl66bg5i3539cv8npvthhp9i53uhk
 targets:
@@ -31,6 +31,8 @@ targets:
       - path: ../MinutesKit/Sources/MinutesApp/AppState.swift
       - path: ../MinutesKit/Sources/MinutesApp/AppState+Parachute.swift
       - path: ../MinutesKit/Sources/MinutesApp/ParachuteVaultSettings.swift
+      - path: ../MinutesKit/Sources/MinutesApp/AppState+Sync.swift
+      - path: ../MinutesKit/Sources/MinutesApp/LibrarySyncSettings.swift
       - path: ../MinutesKit/Sources/MinutesApp/MeetingMarkdownDocument.swift
       - path: ../MinutesKit/Sources/MinutesApp/FolderLibrary.swift
     dependencies:
@@ -48,6 +50,8 @@ targets:
         product: MinutesExport
       - package: MinutesKit
         product: MinutesUI
+      - package: MinutesKit
+        product: MinutesSync
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.minutes.ios

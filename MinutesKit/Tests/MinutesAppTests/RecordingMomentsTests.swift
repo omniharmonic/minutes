@@ -35,3 +35,16 @@ import MinutesSpeech
         #expect(store.listBookmarks(meetingId: id).map(\.label) == ["Budget decision"])
     }
 }
+
+@MainActor struct LibrarySyncAvailabilityTests {
+    @Test("Without the iCloud entitlement, sync stays off and never touches CloudKit")
+    func unavailableWithoutEntitlement() throws {
+        let store = try MinutesStore(dbPath: ":memory:")
+        let state = try AppState(store: store, audioDirectory: FileManager.default.temporaryDirectory,
+                                 preferences: UserDefaults(suiteName: "minutes-sync-" + UUID().uuidString)!)
+        #expect(AppState.cloudKitContainerIdentifier == nil && !state.librarySyncAvailable)
+        state.iCloudSyncEnabled = true
+        #expect(state.librarySync == nil && state.librarySyncStatus == nil)
+        #expect(state.librarySyncDescription.contains("isn’t included"))
+    }
+}

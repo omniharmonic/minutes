@@ -14,6 +14,7 @@ import MinutesSpeakerID
 import MinutesCalendar
 import MinutesSummarize
 import MinutesExport
+import MinutesSync
 import MinutesUI
 import os
 
@@ -145,6 +146,12 @@ public final class AppState: ObservableObject {
     var parachuteConnection: ParachuteVaultConnection?
     var parachuteSignIn: Task<Void, Never>?
     var parachuteSavesInFlight: Set<String> = []
+    /// Opt-in iCloud sync between this person's devices.
+    @Published public var iCloudSyncEnabled = false { didSet { preferences.set(iCloudSyncEnabled, forKey: "iCloudSyncEnabled"); librarySyncSettingChanged(from: oldValue) } }
+    @Published public var iCloudSyncRecordings = false { didSet { preferences.set(iCloudSyncRecordings, forKey: "iCloudSyncRecordings"); if oldValue != iCloudSyncRecordings { restartLibrarySync() } } }
+    @Published public internal(set) var librarySyncStatus: LibrarySyncStatus?
+    var librarySync: AnyObject?
+    var librarySyncTimer: AnyCancellable?
     @Published public var prismOrigin = "" {
         didSet {
             preferences.set(prismOrigin, forKey: "prismOrigin")
@@ -282,6 +289,8 @@ public final class AppState: ObservableObject {
         self.parachuteServer = preferences.string(forKey: "parachuteServer") ?? ""
         self.parachuteFolder = preferences.string(forKey: "parachuteFolder") ?? "Meetings"
         self.autoExportParachute = preferences.bool(forKey: "autoExportParachute")
+        self.iCloudSyncEnabled = preferences.bool(forKey: "iCloudSyncEnabled")
+        self.iCloudSyncRecordings = preferences.bool(forKey: "iCloudSyncRecordings")
         self.prismVaultID = preferences.string(forKey: "prismVaultID") ?? ""
         self.prismDirectory = preferences.string(forKey: "prismDirectory") ?? "Minutes"
         // Prism settings are no longer shown, so automatic Prism delivery must not keep
@@ -1082,6 +1091,7 @@ public final class AppState: ObservableObject {
                         : "Recording and transcript highlights saved. Enable Apple Intelligence summaries for an AI draft."
                 }
                 if apple { await automaticallyExportToPrism(meetingID: meetingID); await automaticallyExportToParachute(meetingID: meetingID) }
+                syncLibraryNow()
             } else {
                 statusMessage = "Recording processed. Changes made while preparing notes were preserved."
             }
@@ -1257,6 +1267,7 @@ public final class AppState: ObservableObject {
                 ? summary.overview
                 : (apple ? "On-device AI draft saved. Review it before sharing." : "Transcript highlights saved. No AI summary was generated.")
             if apple { await automaticallyExportToPrism(meetingID: meeting.id); await automaticallyExportToParachute(meetingID: meeting.id) }
+            syncLibraryNow()
         } catch { statusMessage = "Summary failed: \(error.localizedDescription) Your existing notes and transcript are preserved." }
     }
 
@@ -1292,6 +1303,7 @@ public final class AppState: ObservableObject {
     /// Resume a stored native grant; never opens a browser or sends an email.
     public func restorePrismConnection() async {
         await restoreParachuteVault()
+        startLibrarySyncIfEnabled()
         guard !prismOrigin.isEmpty, !prismBusy, !restoringPrism else { return }
         restoringPrism = true
         defer { restoringPrism = false }

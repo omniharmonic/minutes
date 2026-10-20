@@ -332,24 +332,28 @@ public struct RecordingLaunchButton: View {
         .contentShape(Capsule())
     }
 
-    /// One large clear-glass disc; the red core says "record" without a word.
+    /// Voice Memos proportions: a red core that nearly fills a thin glass ring.
     private var circle: some View {
         ZStack {
             if isRecording {
-                VStack(spacing: 2) {
-                    Image(systemName: "waveform").font(.system(size: 22, weight: .semibold)).foregroundStyle(.red)
-                        .symbolEffect(.variableColor.iterative, isActive: true)
-                    Text(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond)))
-                        .font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.primary)
-                }
+                RoundedRectangle(cornerRadius: 7).fill(Color.red).frame(width: 24, height: 24)
             } else {
-                Circle().fill(Color.red).frame(width: 30, height: 30)
-                    .shadow(color: .red.opacity(0.35), radius: 6)
+                Circle().fill(Color.red).frame(width: 48, height: 48)
             }
         }
-        .frame(width: 76, height: 76)
+        .frame(width: 60, height: 60)
         .minutesClearGlass(in: Circle())
         .contentShape(Circle())
+        .overlay(alignment: .top) {
+            if isRecording {
+                Text(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond)))
+                    .font(.caption.weight(.semibold)).monospacedDigit()
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .minutesClearGlass(in: Capsule())
+                    .fixedSize().offset(y: -30)
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isRecording)
     }
 }
 #endif

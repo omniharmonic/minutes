@@ -596,6 +596,44 @@ public final class MinutesStore: @unchecked Sendable {
         // v9_meeting_trash: reversible deletion preserves audio and all child records.
         guard sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS meeting_trash (meeting_id TEXT PRIMARY KEY REFERENCES meeting(id) ON DELETE CASCADE, deleted_at REAL NOT NULL);", nil, nil, nil) == SQLITE_OK else { throw databaseError("Add meeting trash") }
 
+        // v10_sync_record: the last copy exchanged with the person's private iCloud
+        // database per record (3-way merge base) plus CloudKit's opaque system fields.
+        guard sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS sync_record (record_name TEXT PRIMARY KEY, base_payload BLOB, system_fields BLOB);", nil, nil, nil) == SQLITE_OK else { throw databaseError("Add sync records") }
+
+        // v11_sync_dirty: triggers mark the synced record a row belongs to whenever it
+        // changes (app or CLI), so a sync pass only re-encodes what changed.
+        let syncDirtyExisted = try folderStatement("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_dirty'") { sqlite3_step($0) == SQLITE_ROW }
+        guard sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS sync_dirty (record_name TEXT PRIMARY KEY);", nil, nil, nil) == SQLITE_OK else { throw databaseError("Add sync change marks") }
+        let syncTriggers: [(table: String, records: [String])] = [
+            ("meeting", ["'Meeting:'||ROW.id", "'Audio:'||ROW.id"]),
+            ("utterance", ["'Meeting:'||ROW.meeting_id"]), ("summary", ["'Meeting:'||ROW.meeting_id"]),
+            ("bookmark", ["'Meeting:'||ROW.meeting_id"]), ("speaker_cluster", ["'Meeting:'||ROW.meeting_id"]),
+            ("meeting_attendee", ["'Meeting:'||ROW.meeting_id"]), ("meeting_trash", ["'Meeting:'||ROW.meeting_id"]),
+            ("meeting_folder_membership", ["'Meeting:'||ROW.meeting_id"]),
+            ("meeting_folder", ["'Folder:'||ROW.id"]), ("person", ["'Person:'||ROW.id"]),
+        ]
+        for (table, records) in syncTriggers {
+            for (event, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
+                // An outer upsert's conflict policy overrides OR IGNORE inside a trigger, so test first.
+                let inserts = records.map { record -> String in
+                    let value = record.replacingOccurrences(of: "ROW", with: row)
+                    return "INSERT INTO sync_dirty(record_name) SELECT \(value) WHERE NOT EXISTS (SELECT 1 FROM sync_dirty WHERE record_name = \(value));"
+                }.joined(separator: " ")
+                let sql = "CREATE TRIGGER IF NOT EXISTS sync_dirty_\(table)_\(event.lowercased()) AFTER \(event) ON \(table) BEGIN \(inserts) END;"
+                guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw databaseError("Add sync change trigger") }
+            }
+        }
+        if !syncDirtyExisted {
+            // Everything that existed before tracking began is new to sync.
+            let seed = """
+            INSERT OR IGNORE INTO sync_dirty SELECT 'Meeting:'||id FROM meeting;
+            INSERT OR IGNORE INTO sync_dirty SELECT 'Audio:'||id FROM meeting;
+            INSERT OR IGNORE INTO sync_dirty SELECT 'Folder:'||id FROM meeting_folder;
+            INSERT OR IGNORE INTO sync_dirty SELECT 'Person:'||id FROM person;
+            """
+            guard sqlite3_exec(db, seed, nil, nil, nil) == SQLITE_OK else { throw databaseError("Seed sync change marks") }
+        }
+
         // Upgrade user_version to at least 1 if not set
         var vStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &vStmt, nil) == SQLITE_OK {
@@ -1709,3 +1747,150 @@ public final class MinutesStore: @unchecked Sendable {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+// MARK: - Cross-device sync support
+
+/// What a synced record last looked like, and CloudKit's change tag for it.
+public struct SyncRecordState: Sendable, Equatable {
+    public let name: String
+    public let basePayload: Data?
+    public let systemFields: Data?
+    public init(name: String, basePayload: Data?, systemFields: Data?) {
+        self.name = name; self.basePayload = basePayload; self.systemFields = systemFields
+    }
+}
+
+extension MinutesStore {
+    public func syncRecordState(_ name: String) throws -> SyncRecordState? {
+        lock.lock(); defer { lock.unlock() }
+        return try folderStatement("SELECT base_payload, system_fields FROM sync_record WHERE record_name=?", values: [name]) { statement in
+            let code = sqlite3_step(statement)
+            guard code == SQLITE_ROW || code == SQLITE_DONE else { throw databaseError("Read sync record") }
+            guard code == SQLITE_ROW else { return nil }
+            return SyncRecordState(name: name, basePayload: Self.blob(statement, 0), systemFields: Self.blob(statement, 1))
+        }
+    }
+
+    public func listSyncRecordNames() throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return try folderStatement("SELECT record_name FROM sync_record ORDER BY record_name") { statement in
+            var names: [String] = []
+            while sqlite3_step(statement) == SQLITE_ROW { names.append(String(cString: sqlite3_column_text(statement, 0))) }
+            return names
+        }
+    }
+
+    /// Records a payload as agreed with the server; nil fields keep their stored value.
+    public func saveSyncRecordState(_ name: String, basePayload: Data?, systemFields: Data?) throws {
+        lock.lock(); defer { lock.unlock() }
+        var pointer: OpaquePointer?
+        let sql = """
+        INSERT INTO sync_record(record_name, base_payload, system_fields) VALUES (?,?,?)
+        ON CONFLICT(record_name) DO UPDATE SET base_payload=COALESCE(excluded.base_payload, sync_record.base_payload),
+            system_fields=COALESCE(excluded.system_fields, sync_record.system_fields)
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &pointer, nil) == SQLITE_OK, let statement = pointer else { throw databaseError("Prepare sync record") }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (name as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        for (index, data) in [(2, basePayload), (3, systemFields)] {
+            if let data { _ = data.withUnsafeBytes { sqlite3_bind_blob(statement, Int32(index), $0.baseAddress, Int32(data.count), SQLITE_TRANSIENT) } }
+            else { sqlite3_bind_null(statement, Int32(index)) }
+        }
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw databaseError("Save sync record") }
+    }
+
+    /// Records changed here since they were last compared with the synced copy.
+    public func listSyncDirtyRecordNames() throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return try folderStatement("SELECT record_name FROM sync_dirty ORDER BY record_name") { statement in
+            var names: [String] = []
+            while sqlite3_step(statement) == SQLITE_ROW { names.append(String(cString: sqlite3_column_text(statement, 0))) }
+            return names
+        }
+    }
+
+    public func clearSyncDirty(_ name: String) throws {
+        try withImmediateTransaction { try folderWrite("DELETE FROM sync_dirty WHERE record_name=?", values: [name]) }
+    }
+
+    public func markSyncDirty(_ name: String) throws {
+        try withImmediateTransaction { try folderWrite("INSERT OR IGNORE INTO sync_dirty(record_name) VALUES (?)", values: [name]) }
+    }
+
+    public func deleteSyncRecordState(_ name: String) throws {
+        try withImmediateTransaction { try folderWrite("DELETE FROM sync_record WHERE record_name=?", values: [name]) }
+    }
+
+    /// Forgets every sync record, for example after signing out of iCloud.
+    public func resetSyncRecordStates() throws {
+        try withImmediateTransaction {
+            try folderWrite("DELETE FROM sync_record")
+            for sql in ["INSERT OR IGNORE INTO sync_dirty SELECT 'Meeting:'||id FROM meeting", "INSERT OR IGNORE INTO sync_dirty SELECT 'Audio:'||id FROM meeting",
+                        "INSERT OR IGNORE INTO sync_dirty SELECT 'Folder:'||id FROM meeting_folder", "INSERT OR IGNORE INTO sync_dirty SELECT 'Person:'||id FROM person"] {
+                try folderWrite(sql)
+            }
+        }
+    }
+
+    public func isMeetingInTrash(id: String) throws -> Bool {
+        try folderStatement("SELECT 1 FROM meeting_trash WHERE meeting_id=?", values: [id]) { statement in
+            let code = sqlite3_step(statement)
+            guard code == SQLITE_ROW || code == SQLITE_DONE else { throw databaseError("Read trash") }
+            return code == SQLITE_ROW
+        }
+    }
+
+    /// Makes a meeting's transcript exactly `utterances`, removing rows no longer present.
+    public func replaceUtterances(meetingId: String, with utterances: [Utterance]) throws {
+        try withImmediateTransaction {
+            try deleteChildren(table: "utterance", idColumn: "id", meetingId: meetingId, keep: utterances.map { String($0.id) })
+            try saveUtterances(utterances)
+        }
+    }
+
+    public func replaceBookmarks(meetingId: String, with bookmarks: [Bookmark]) throws {
+        try withImmediateTransaction {
+            try deleteChildren(table: "bookmark", idColumn: "id", meetingId: meetingId, keep: bookmarks.map(\.id))
+            for bookmark in bookmarks { try saveBookmark(bookmark) }
+        }
+    }
+
+    /// Speaker voice embeddings never leave a device, so a cluster arriving
+    /// without one keeps the local embedding of the same cluster.
+    public func replaceSpeakerClusters(meetingId: String, with clusters: [SpeakerCluster]) throws {
+        try withImmediateTransaction {
+            let local = Dictionary(listSpeakerClusters(meetingId: meetingId).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            try deleteChildren(table: "speaker_cluster", idColumn: "id", meetingId: meetingId, keep: clusters.map(\.id))
+            try saveSpeakerClusters(clusters.map { cluster in
+                guard cluster.centroid.isEmpty, let existing = local[cluster.id] else { return cluster }
+                var merged = cluster
+                merged.centroid = existing.centroid
+                merged.embeddingModel = existing.embeddingModel
+                return merged
+            })
+        }
+    }
+
+    /// Inserts or updates a folder keeping its id (folders created on another device).
+    public func upsertFolder(_ folder: MeetingFolder) throws {
+        let fields = try checkedFolderFields(name: folder.name, description: folder.description)
+        try withImmediateTransaction {
+            try folderWrite("""
+                INSERT INTO meeting_folder(id,name,description,sort_order,created_at) VALUES (?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, sort_order=excluded.sort_order, created_at=excluded.created_at
+                """, values: [folder.id, fields.0, fields.1, String(folder.sortOrder), String(folder.createdAt.timeIntervalSince1970)])
+        }
+    }
+
+    /// Text ids also match INTEGER ids: SQLite applies the column's affinity to IN values.
+    private func deleteChildren(table: String, idColumn: String, meetingId: String, keep: [String]) throws {
+        let placeholders = keep.map { _ in "?" }.joined(separator: ",")
+        let filter = keep.isEmpty ? "" : " AND \(idColumn) NOT IN (\(placeholders))"
+        try folderWrite("DELETE FROM \(table) WHERE meeting_id=?" + filter, values: [meetingId] + keep)
+    }
+
+    private static func blob(_ statement: OpaquePointer, _ column: Int32) -> Data? {
+        guard sqlite3_column_type(statement, column) != SQLITE_NULL, let bytes = sqlite3_column_blob(statement, column) else { return nil }
+        return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, column)))
+    }
+}

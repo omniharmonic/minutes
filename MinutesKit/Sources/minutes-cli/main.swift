@@ -30,6 +30,7 @@ func printHelp() {
       minutes-cli vault signin|status|verify|signout --server <parachute-host>
       minutes-cli vault export <meeting-id> --server <parachute-host> [--folder Meetings]
       minutes-cli bookmarks list|add|rename|delete <meeting-id> [...]
+      minutes-cli sync status|pending|payload <record>|reset [--recordings]
       minutes-cli prism status|verify|outbox|sync|disconnect --origin <https-origin>
       minutes-cli prism enqueue <meeting-id> --origin <https-origin> --vault <granted-vault-id>
       minutes-cli speech-regions <audio-path>
@@ -247,6 +248,11 @@ struct MinutesCLI {
             if cmd == "prism" { try await PrismConnectionCLI.run(arguments: args, store: store); return }
             if cmd == "vault" { try await ParachuteVaultCLI.run(arguments: args, store: store); return }
             if cmd == "bookmarks" { try BookmarkCLI.run(arguments: args, store: store); return }
+            if cmd == "sync" {
+                let library = dataDir ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Minutes").path
+                try SyncCLI.run(arguments: args, store: store, audioDirectory: URL(fileURLWithPath: library, isDirectory: true))
+                return
+            }
             if cmd == "voices" { try VoiceEnrollmentCLI.run(arguments: args, store: store); return }
             if cmd == "audio" {
                 let library = dataDir ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Minutes").path

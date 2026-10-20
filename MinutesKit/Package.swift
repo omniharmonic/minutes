@@ -20,6 +20,7 @@ let package = Package(
         .library(name: "MinutesSummarize", targets: ["MinutesSummarize"]),
         .library(name: "MinutesExport", targets: ["MinutesExport"]),
         .library(name: "MinutesUI", targets: ["MinutesUI"]),
+        .library(name: "MinutesSync", targets: ["MinutesSync"]),
         .executable(name: "MinutesApp", targets: ["MinutesApp"]),
         .executable(name: "minutes-cli", targets: ["minutes-cli"])
     ],
@@ -52,6 +53,10 @@ let package = Package(
             dependencies: ["MinutesCore"]
         ),
         .target(
+            name: "MinutesSync",
+            dependencies: ["MinutesCore"]
+        ),
+        .target(
             name: "MinutesUI",
             dependencies: [
                 "MinutesCore",
@@ -71,7 +76,8 @@ let package = Package(
                 "MinutesCalendar",
                 "MinutesSummarize",
                 "MinutesExport",
-                "MinutesUI"
+                "MinutesUI",
+                "MinutesSync"
             ],
             exclude: ["Info.plist"],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", appInfoPlist], .when(platforms: [.macOS]))]
@@ -84,7 +90,8 @@ let package = Package(
                 "MinutesSpeakerID",
                 "MinutesCalendar",
                 "MinutesSummarize",
-                "MinutesExport"
+                "MinutesExport",
+                "MinutesSync"
             ],
             exclude: ["Info.plist"],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", cliInfoPlist], .when(platforms: [.macOS]))]
@@ -110,6 +117,10 @@ let package = Package(
         .testTarget(
             name: "MinutesExportTests",
             dependencies: ["MinutesExport"]
+        ),
+        .testTarget(
+            name: "MinutesSyncTests",
+            dependencies: ["MinutesSync"]
         ),
         .testTarget(
             name: "MinutesSummarizeTests",

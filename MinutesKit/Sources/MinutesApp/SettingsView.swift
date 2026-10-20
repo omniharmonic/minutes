@@ -162,6 +162,7 @@ public struct SettingsView: View {
 
     private var connections: some View {
         Form {
+            LibrarySyncSettings(appState: appState)
             ParachuteVaultSettings(appState: appState)
             if !appState.prismOutbox.isEmpty {
                 Section("Earlier Prism deliveries") { deliveries }

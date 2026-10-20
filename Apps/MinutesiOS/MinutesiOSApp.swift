@@ -172,6 +172,7 @@ private struct IOSRootView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             UIApplication.shared.isIdleTimerDisabled = processingNeedsScreen && phase == .active
+            if phase == .active { state.syncLibraryNow() }
             #if DEBUG
             ProcessingAcceptance.record("scene-\(phase)", state: state)
             #endif
@@ -251,6 +252,9 @@ private struct IOSRootView: View {
             } header: { Text(group.title).textCase(nil).font(.title2.bold()).foregroundStyle(.primary) }
             }
         }
+        // Plain rows (as in Voice Memos) slide cleanly when swiped; inset cards
+        // swap a hard edge for a rounded one mid-gesture.
+        .listStyle(.plain)
         .contentMargins(.bottom, 110, for: .scrollContent)
         .navigationTitle(state.libraryTitle)
         .onAppear { state.selectLibrary(scope) }
@@ -361,6 +365,7 @@ private struct IOSRootView: View {
                             Button("Enable meeting reminders") { Task { await state.enableCalendarNotifications() } }
                         }
                     }
+                    LibrarySyncSettings(appState: state)
                     googleSettings
                     prismSettings
                     summarySettings
