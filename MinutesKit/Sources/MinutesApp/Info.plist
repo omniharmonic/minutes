@@ -30,7 +30,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>65</string>
+	<string>66</string>
 	<key>GoogleDesktopClientID</key>
 	<string>618880165655-s4ct030bbuqbti3cqlkt6jsdtqf77lve.apps.googleusercontent.com</string>
 	<key>GoogleIOSClientID</key>
@@ -49,6 +49,10 @@
 	<string>Minutes requires microphone access to record meetings for local transcription and diarization.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Minutes uses Apple Speech for on-device meeting transcription. Unsupported local recognition fails without sending audio to a server.</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/omniharmonic/minutes-releases/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>wn/PgI8j0aAv6h8k6TksAvKL2EZjZFRznqZIkkaTQbk=</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

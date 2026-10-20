@@ -327,3 +327,8 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] iCloud sync (MinutesSync, CKSyncEngine): meetings with transcripts, summaries, notes, moments, folders, people and optional recordings; three-way merge; voice embeddings stay local. `minutes-cli sync status|pending|payload|reset`. 413 tests pass. Mac 61, iOS 58.
 - [x] iCloud provisioning done without the portal (Xcode-managed container/capability, Developer ID profile via Xcode export), schema imported with cktool and deployed to Production. Live: Mac library uploaded (283 records) and an isolated library downloaded an identical copy with no voice embeddings. Fixed a crash found live (an unlocked store read raced the main thread). Mac 63 (sync on), iOS 59.
 - [ ] Owner: turn on Settings → Sync on the iPhone and confirm meetings appear.
+
+### 2026-10-20 — public release with updates / Mac 66
+- [x] Sparkle 2.10.0 updater: EdDSA key in the login Keychain (account `ai.nosaas.minutes`), public key and feed in Info.plist; Sparkle asks before automatic checks (opt-in, local-first); "Check for Updates…" in the app menu. build-app.sh embeds and signs Sparkle's helpers.
+- [x] Public repo https://github.com/omniharmonic/minutes-releases (README, appcast.xml, releases). `scripts/publish-release.sh <build-dir> "<notes>"` signs, releases and updates the feed.
+- [x] v1.0.0-66 published: notarized, Gatekeeper-accepted after download, Sparkle signature verified against the live feed. Website links point to the new repo.

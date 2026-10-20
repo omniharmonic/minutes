@@ -24,7 +24,11 @@ let package = Package(
         .executable(name: "MinutesApp", targets: ["MinutesApp"]),
         .executable(name: "minutes-cli", targets: ["minutes-cli"])
     ],
-    dependencies: [.package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7")],
+    dependencies: [
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7"),
+        // Mac app updates (EdDSA-signed appcast); the person opts in on second launch.
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0")
+    ],
     targets: [
         .target(
             name: "MinutesCore",
@@ -77,10 +81,15 @@ let package = Package(
                 "MinutesSummarize",
                 "MinutesExport",
                 "MinutesUI",
-                "MinutesSync"
+                "MinutesSync",
+                .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS]))
             ],
             exclude: ["Info.plist"],
-            linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", appInfoPlist], .when(platforms: [.macOS]))]
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", appInfoPlist], .when(platforms: [.macOS])),
+                // Sparkle.framework is embedded in Contents/Frameworks by scripts/build-app.sh.
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"], .when(platforms: [.macOS]))
+            ]
         ),
         .executableTarget(
             name: "minutes-cli",

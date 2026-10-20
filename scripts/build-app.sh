@@ -49,12 +49,19 @@ if [[ ! -d "$RESOURCES_DIR/FluidAudio_FluidAudio.bundle" ]]; then
     exit 1
 fi
 
+# Sparkle (updates) is the one embedded dynamic framework; SwiftPM leaves it in
+# the package artifacts, and the executable finds it through @executable_path/../Frameworks.
+SPARKLE_FRAMEWORK="$ROOT_DIR/MinutesKit/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+[[ -d "$SPARKLE_FRAMEWORK" ]] || { echo "Error: Sparkle.framework missing; run swift package resolve" >&2; exit 1; }
+mkdir -p "$CONTENTS_DIR/Frameworks"
+ditto "$SPARKLE_FRAMEWORK" "$CONTENTS_DIR/Frameworks/Sparkle.framework"
+
 # FluidAudio 0.17.7's NemoTextProcessing xcframework contains a static .a;
 # it does not require embedding a dynamic framework. Refuse future unsupported
 # dynamic dependencies instead of silently shipping checkout-relative links.
 while IFS= read -r dependency; do
     case "$dependency" in
-        /System/Library/*|/usr/lib/*) ;;
+        /System/Library/*|/usr/lib/*|@rpath/Sparkle.framework/*) ;;
         *) echo "Error: Non-system dynamic dependency needs explicit embedding/rpath handling: $dependency" >&2; exit 1 ;;
     esac
 done < <(otool -L "$MACOS_DIR/Minutes" | awk 'NR > 1 { print $1 }')
@@ -119,6 +126,15 @@ else
     ARCHIVE_NAME="Minutes-1.0.0-signed-unnotarized.zip"
     echo "==> Signing with Developer ID; notarization remains a separate required release step"
 fi
+
+# Sign Sparkle's helpers inside out, keeping the Downloader's entitlements.
+SPARKLE_EMBEDDED="$CONTENTS_DIR/Frameworks/Sparkle.framework"
+SPARKLE_SIGN=("${SIGN_OPTIONS[@]}")
+codesign "${SPARKLE_SIGN[@]}" "$SPARKLE_EMBEDDED/Versions/B/XPCServices/Installer.xpc"
+codesign "${SPARKLE_SIGN[@]}" --preserve-metadata=entitlements "$SPARKLE_EMBEDDED/Versions/B/XPCServices/Downloader.xpc"
+codesign "${SPARKLE_SIGN[@]}" "$SPARKLE_EMBEDDED/Versions/B/Autoupdate"
+codesign "${SPARKLE_SIGN[@]}" "$SPARKLE_EMBEDDED/Versions/B/Updater.app"
+codesign "${SPARKLE_SIGN[@]}" "$SPARKLE_EMBEDDED"
 
 # Sign nested resource bundles before the containing application.
 for resource_bundle in "$RESOURCES_DIR"/*.bundle(N); do

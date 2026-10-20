@@ -78,6 +78,7 @@ final class MinutesApplicationDelegate: NSObject, NSApplicationDelegate {
 @main
 public struct MinutesApp: App {
     @StateObject private var startup = AppStartup()
+    @StateObject private var updater = AppUpdater()
     @NSApplicationDelegateAdaptor(MinutesApplicationDelegate.self) private var applicationDelegate
     
     public init() {}
@@ -110,6 +111,10 @@ public struct MinutesApp: App {
         .windowToolbarStyle(.unified)
         .defaultSize(width: 1292, height: 864)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
             CommandMenu("Captions") {
                 Button("Focus Caption History") { startup.state?.captionPanel.focus() }
                     .keyboardShortcut("l", modifiers: [.command, .option])
