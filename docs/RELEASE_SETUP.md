@@ -43,9 +43,11 @@ References: [Apple Developer ID creation](https://developer.apple.com/help/accou
 Mac package command:
 
 ```sh
-DEVELOPER_ID_APPLICATION='Developer ID Application: YOUR IDENTITY (TEAMID)' \
-NOTARYTOOL_PROFILE='YOUR_LOCAL_PROFILE' ./scripts/build-app.sh
+DEVELOPER_ID_APPLICATION='Developer ID Application: BENJAMIN GLEASON ROSS (83Y42N33H8)' \
+NOTARYTOOL_PROFILE=minutes-notary MINUTES_BUNDLE_GOOGLE_REGISTRATION=1 ./scripts/build-app.sh
 ```
+
+The script refuses a Developer ID build unless it is either notarized (`NOTARYTOOL_PROFILE`) or marked as local-only (`MINUTES_ALLOW_UNNOTARIZED=1`). A notarized build must also bundle the Google registration. When `build/signing/Minutes_DeveloperID.provisionprofile` exists, iCloud sync is included automatically; see docs/SYNC_SETUP.md. Any CloudKit schema change must be deployed to Production (`docs/cloudkit-schema.ckdb`, `xcrun cktool import-schema`, then Deploy in CloudKit Console) **before** a build that uses it ships, because every build talks to Production.
 
 The script signs nested resources and the app, submits to notarization only when explicitly configured, checks Accepted status, staples/validates and assesses Gatekeeper before publishing a notarized ZIP. An ad-hoc build is local-test-only. A signed archive without a notary profile remains explicitly unnotarized.
 

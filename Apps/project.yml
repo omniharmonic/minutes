@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "59"
+    CURRENT_PROJECT_VERSION: "60"
     DEVELOPMENT_TEAM: 83Y42N33H8
     GOOGLE_REVERSED_CLIENT_ID: com.googleusercontent.apps.618880165655-h7cgl66bg5i3539cv8npvthhp9i53uhk
 targets:
@@ -34,6 +34,7 @@ targets:
       - path: ../MinutesKit/Sources/MinutesApp/AppState+Sync.swift
       - path: ../MinutesKit/Sources/MinutesApp/LibrarySyncSettings.swift
       - path: ../MinutesKit/Sources/MinutesApp/GoogleCalendarPicker.swift
+      - path: ../MinutesKit/Sources/MinutesApp/WelcomeView.swift
       - path: ../MinutesKit/Sources/MinutesApp/MeetingMarkdownDocument.swift
       - path: ../MinutesKit/Sources/MinutesApp/FolderLibrary.swift
     dependencies:
@@ -73,7 +74,6 @@ targets:
     info:
       path: MinutesiOS/Info.plist
       properties:
-        GoogleDesktopClientID: 618880165655-s4ct030bbuqbti3cqlkt6jsdtqf77lve.apps.googleusercontent.com
         GoogleIOSClientID: 618880165655-h7cgl66bg5i3539cv8npvthhp9i53uhk.apps.googleusercontent.com
         CFBundleDisplayName: Minutes
         MinutesCloudKitContainer: iCloud.ai.nosaas.minutes

@@ -1,6 +1,6 @@
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
-const pages = new Map([['/about','about.html'],['/privacy','privacy.html'],['/support','support.html'],['/google730d19efb4075d6c.html','google730d19efb4075d6c.html']]);
+const pages = new Map([['','about.html'],['/about','about.html'],['/terms','terms.html'],['/privacy','privacy.html'],['/support','support.html'],['/google730d19efb4075d6c.html','google730d19efb4075d6c.html']]);
 const host = '127.0.0.1';
 const port = Number(process.env.PORT || 8790);
 http.createServer(async (request, response) => {

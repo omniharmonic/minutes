@@ -88,6 +88,7 @@ public struct MinutesApp: App {
             Group {
                 if let appState = startup.state {
                     MainWindowView(appState: appState)
+                        .sheet(isPresented: Binding(get: { !appState.welcomeCompleted }, set: { _ in })) { WelcomeView(appState: appState) }
                         .onAppear { applicationDelegate.state = appState }
                         .task { await appState.restoreCalendarConnections() }
                         .task { await appState.restorePrismConnection() }

@@ -130,6 +130,7 @@ private struct IOSRootView: View {
         // Primary tint keeps navigation monochrome; swipe actions set their own colours.
         .tint(.primary)
         .toggleStyle(MinutesToggleStyle())
+        .sheet(isPresented: Binding(get: { !state.welcomeCompleted }, set: { _ in })) { WelcomeView(appState: state) }
         .sheet(isPresented: $showingTrash) {
             RecentlyDeletedView(load: { state.store.listMeetings(inTrash: true) }, restore: { try state.restoreMeeting($0) })
         }
@@ -392,22 +393,30 @@ private struct IOSRootView: View {
     }
 
     private var googleSettings: some View {
-        Section("Google Calendar · direct") {
+        Section("Google Calendar · Beta") {
             Text(state.googleMessage).font(.footnote).foregroundStyle(.secondary)
+            if !state.googleConnected {
+                Text("Google is still reviewing Minutes, so sign-in shows a warning first. Apple Calendar works without it.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             Button("Connect Google") { Task { await state.connectGoogleCalendar() } }.disabled(state.googleConnecting)
-            Button("Resume saved Google connection") { Task { await state.resumeGoogleCalendar() } }.disabled(state.googleConnecting)
+            if state.googleConnected {
+                Button("Refresh Calendar") { Task { await state.resumeGoogleCalendar() } }.disabled(state.googleConnecting)
+            }
             GoogleCalendarPicker(appState: state)
             Button(state.googleConnecting ? "Cancel Google sign-in" : "Disconnect Google", role: .destructive) {
                 Task { await state.disconnectGoogleCalendar() }
             }.disabled(!state.googleConnected && !state.googleConnecting)
             Text("Read-only access to calendars and meeting invitees.")
                 .font(.footnote).foregroundStyle(.secondary)
+            #if DEBUG
             DisclosureGroup("Advanced") {
                 TextField("iOS public client ID", text: $state.googleIOSClientID)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Text("The app’s Google registration is preconfigured. Change this only when using a different native OAuth client; tokens remain in Keychain.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            #endif
         }
     }
     @ViewBuilder private var prismSettings: some View {

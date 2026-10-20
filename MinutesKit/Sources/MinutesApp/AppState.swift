@@ -140,6 +140,9 @@ public final class AppState: ObservableObject {
             if oldValue != parachuteServer { parachuteVault = nil; parachuteConnection = nil; autoExportParachute = false }
         }
     }
+    /// First-launch welcome finished, and the person agreed to tell others when they record.
+    @Published public var welcomeCompleted = false { didSet { preferences.set(welcomeCompleted, forKey: "welcomeCompleted") } }
+    @Published public var recordingConsentAcknowledged = false { didSet { preferences.set(recordingConsentAcknowledged, forKey: "recordingConsentAcknowledged") } }
     @Published public var parachuteFolder = "Meetings" { didSet { preferences.set(parachuteFolder, forKey: "parachuteFolder") } }
     @Published public var autoExportParachute = false { didSet { preferences.set(autoExportParachute, forKey: "autoExportParachute") } }
     @Published public internal(set) var parachuteVault: ParachuteVaultStatus?
@@ -290,6 +293,10 @@ public final class AppState: ObservableObject {
         self.prismOrigin = preferences.string(forKey: "prismOrigin") ?? ""
         self.parachuteServer = preferences.string(forKey: "parachuteServer") ?? ""
         self.parachuteFolder = preferences.string(forKey: "parachuteFolder") ?? "Meetings"
+        // Existing libraries skip the welcome; their owner has been recording already.
+        let hasMeetings = !self.store.listMeetings().isEmpty
+        self.welcomeCompleted = preferences.object(forKey: "welcomeCompleted") as? Bool ?? hasMeetings
+        self.recordingConsentAcknowledged = preferences.object(forKey: "recordingConsentAcknowledged") as? Bool ?? hasMeetings
         self.autoExportParachute = preferences.bool(forKey: "autoExportParachute")
         self.iCloudSyncEnabled = preferences.bool(forKey: "iCloudSyncEnabled")
         self.iCloudSyncRecordings = preferences.bool(forKey: "iCloudSyncRecordings")
@@ -377,6 +384,7 @@ public final class AppState: ObservableObject {
     public var canStartRecording: Bool { recordingModelsReady && !isRecording && !isProcessing && !isStartingRecording && !isFinalizingRecording && !isSettingUpSpeechModels && !isPreparingRecording }
     public func prepareRecording() async -> Bool {
         guard !isPreparingRecording, !isRecording, !isProcessing, !isStartingRecording, !isFinalizingRecording else { return false }
+        guard recordingConsentAcknowledged else { welcomeCompleted = false; return false }
         refreshSpeechReadiness()
         guard recordingModelsReady else { statusMessage = speechModelStatus; return false }
         isPreparingRecording = true

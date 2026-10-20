@@ -30,9 +30,9 @@ public struct OnboardingView: View {
                 Button("Check permissions again") { permissionManager.checkAllPermissions() }
             } header: { Text("Permissions") }
             Section {
-                Label("Audio and remembered voices stay on this device", systemImage: "internaldrive")
+                Label("Remembered voices never leave this device", systemImage: "internaldrive")
                 Label("Speaker identity is yours to confirm", systemImage: "person.crop.circle.badge.checkmark")
-                Label("Sending notes to a vault requires a verified connection", systemImage: "lock.shield")
+                Label("Notes go to a vault or iCloud only if you turn that on", systemImage: "lock.shield")
                 Text("Manage and delete remembered voices in People & Voices. Only notes and transcripts are sent through exports; voiceprints are excluded.").font(.caption).foregroundStyle(.secondary)
             } header: { Text("Your data") }
             Section { Button("Back to meetings", action: onComplete).buttonStyle(.borderedProminent) }

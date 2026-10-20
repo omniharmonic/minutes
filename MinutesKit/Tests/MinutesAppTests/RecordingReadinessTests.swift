@@ -30,10 +30,21 @@ import MinutesCore
             recordingModelReadiness: { (true, "Ready") },
             recordingEnvironmentPreflight: { throw Denied() },
             captureStart: { _ in Issue.record("Capture must not start") }, captureStop: { nil })
+        state.recordingConsentAcknowledged = true
         #expect(await state.prepareRecording() == false)
         #expect(state.store.listMeetings().isEmpty)
         #expect(!state.isPreparingRecording)
         #expect(state.statusMessage.contains("Speech permission denied"))
+    }
+    @Test("Recording waits for the consent acknowledgement and reopens the welcome")
+    func consentRequiredBeforeRecording() async throws {
+        let state = try AppState(store: MinutesStore(dbPath: ":memory:"), preferences: UserDefaults(suiteName: "minutes-consent-" + UUID().uuidString)!,
+            recordingModelReadiness: { (true, "Ready") },
+            recordingEnvironmentPreflight: { Issue.record("No permission prompt before consent") })
+        #expect(!state.recordingConsentAcknowledged && !state.welcomeCompleted)
+        state.welcomeCompleted = true
+        #expect(await state.prepareRecording() == false)
+        #expect(!state.welcomeCompleted)
     }
     @Test func missingModelsNeverRequestsOSPermissions() async throws {
         let state = try AppState(store: MinutesStore(dbPath: ":memory:"),

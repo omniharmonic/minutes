@@ -72,7 +72,19 @@ NOTARY_PROFILE="${NOTARYTOOL_PROFILE:-}"
 # iCloud sync needs a Developer ID provisioning profile whose App ID has the
 # iCloud (CloudKit) capability and container. Without one the build ships with
 # sync unavailable rather than an entitlement macOS would refuse to launch.
+# Releases for other people must be notarized and include Google sign-in;
+# MINUTES_ALLOW_UNNOTARIZED=1 marks a build for this Mac only.
+if [[ "$SIGNING_IDENTITY" != "-" && -z "$NOTARY_PROFILE" && "${MINUTES_ALLOW_UNNOTARIZED:-0}" != "1" ]]; then
+    echo "Error: set NOTARYTOOL_PROFILE to notarize this Developer ID build, or MINUTES_ALLOW_UNNOTARIZED=1 for a local-only build." >&2
+    exit 1
+fi
+if [[ -n "$NOTARY_PROFILE" && "${MINUTES_BUNDLE_GOOGLE_REGISTRATION:-0}" != "1" ]]; then
+    echo "Error: release builds need MINUTES_BUNDLE_GOOGLE_REGISTRATION=1 so Google sign-in works." >&2
+    exit 1
+fi
+DEFAULT_CLOUDKIT_PROFILE="$ROOT_DIR/build/signing/Minutes_DeveloperID.provisionprofile"
 CLOUDKIT_PROFILE="${MINUTES_CLOUDKIT_PROFILE:-}"
+if [[ -z "$CLOUDKIT_PROFILE" && "$SIGNING_IDENTITY" != "-" && -f "$DEFAULT_CLOUDKIT_PROFILE" ]]; then CLOUDKIT_PROFILE="$DEFAULT_CLOUDKIT_PROFILE"; fi
 CLOUDKIT_CONTAINER="${MINUTES_CLOUDKIT_CONTAINER:-iCloud.ai.nosaas.minutes}"
 if [[ -n "$CLOUDKIT_PROFILE" ]]; then
     [[ "$SIGNING_IDENTITY" != "-" ]] || { echo "Error: iCloud sync requires DEVELOPER_ID_APPLICATION" >&2; exit 1; }

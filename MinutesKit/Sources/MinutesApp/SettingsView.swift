@@ -118,7 +118,7 @@ public struct SettingsView: View {
                 }
             }
             Section {
-                LabeledContent("Google Calendar") {
+                LabeledContent {
                     connectionStatus(appState.googleConnected && appState.calendarSource == .google)
                     if appState.googleConnecting { ProgressView().controlSize(.small) }
                     if appState.googleConnected {
@@ -128,7 +128,17 @@ public struct SettingsView: View {
                             Task { await appState.connectGoogleCalendar() }
                         }
                     }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Google Calendar")
+                        Text("Beta").font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.yellow.opacity(0.25), in: Capsule())
+                    }
                 }.disabled(appState.googleConnecting)
+                if !appState.googleConnected {
+                    Text("Google is still reviewing Minutes, so sign-in shows a warning first. Apple Calendar works without it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if appState.googleMessage != "Connect Google directly, or use accounts in Apple Calendar." {
                     Text(appState.googleMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 }
@@ -139,15 +149,18 @@ public struct SettingsView: View {
                     }.accessibilityElement(children: .combine)
                 }
                 GoogleCalendarPicker(appState: appState)
-                Button(appState.googleConnected ? "Refresh Calendar" : "Reconnect Saved Account") {
-                    Task { await appState.resumeGoogleCalendar() }
-                }.disabled(appState.googleConnecting || appState.googleRefreshing)
+                if appState.googleConnected {
+                    Button("Refresh Calendar") { Task { await appState.resumeGoogleCalendar() } }
+                        .disabled(appState.googleConnecting || appState.googleRefreshing)
+                }
+                #if DEBUG
                 DisclosureGroup("Advanced") {
                     TextField("Mac client ID", text: $appState.googleDesktopClientID)
                     TextField("iOS client ID", text: $appState.googleIOSClientID)
                     Text("Public OAuth client IDs are required for direct sign-in. Credentials stay in Keychain.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                #endif
             }
             Section("Meeting Reminders") {
                 LabeledContent("Notifications") {
@@ -231,8 +244,9 @@ public struct SettingsView: View {
                 }
             }
             Section("Your Data") {
-                Label("Audio and remembered voices stay on this device.", systemImage: "internaldrive")
-                Label("Only notes and transcripts are included in exports.", systemImage: "doc.text")
+                Label("Remembered voices never leave this device.", systemImage: "internaldrive")
+                Label("Recordings stay here unless you turn on Include recordings in Sync.", systemImage: "waveform")
+                Label("Exports include notes and transcripts, never voice profiles.", systemImage: "doc.text")
                 Text("Manage and delete remembered voices in People. Recording begins when you choose Record.")
                     .font(.caption).foregroundStyle(.secondary)
             }
