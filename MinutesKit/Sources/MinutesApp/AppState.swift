@@ -751,21 +751,40 @@ public final class AppState: ObservableObject {
         self.voiceprints = store.listVoiceprints()
     }
     
+    /// The source of the recording in progress, which for a scheduled meeting
+    /// can differ from the saved choice used by Record.
+    @Published public private(set) var activeCaptureMode: CaptureMode?
+    public var displayedCaptureMode: CaptureMode { isRecording || isStartingRecording ? (activeCaptureMode ?? captureMode) : captureMode }
+
+    /// Recordings started from the calendar (prompt or Upcoming) are calls with
+    /// other people, so they always capture call audio and the microphone. Record
+    /// uses the person's saved source.
+    static func captureMode(scheduled: Bool, saved: CaptureMode) -> CaptureMode {
+        #if os(macOS)
+        scheduled ? .systemAndMicrophone : saved
+        #else
+        saved
+        #endif
+    }
+
     public func startQuickMeeting(event: CalendarMeetingEvent? = nil) {
         guard requireRecordingModels() else { return }
+        let mode = Self.captureMode(scheduled: event != nil, saved: captureMode)
         // Restarting from Record (for example after switching to call audio)
         // must keep the meeting's invitees; only an unambiguous event is used.
         let event = event ?? CalendarMeetingEvent.inProgress(in: upcomingEvents, now: Date())
         #if os(macOS)
         var fallbackNotice: String?
-        if captureMode == .systemAndMicrophone && !systemCapturePreflight() {
+        if mode == .systemAndMicrophone && !systemCapturePreflight() {
             // A suggested meeting must still be captured; say plainly what is missing.
             fallbackNotice = "Call audio is not allowed yet, so only your microphone is recording. Allow Minutes in System Settings > Privacy & Security > Screen & System Audio Recording."
-        } else if captureMode != .microphone {
-            let includeMicrophone = captureMode.includesMicrophone
+        } else if mode != .microphone {
+            let includeMicrophone = mode.includesMicrophone
+            activeCaptureMode = mode
             Task { await startSystemMeeting(event: event, includeMicrophone: includeMicrophone) }
             return
         }
+        activeCaptureMode = .microphone
         defer { if let fallbackNotice, isRecording { statusMessage = fallbackNotice } }
         #endif
         guard !isStartingRecording, !isFinalizingRecording else { return }
@@ -890,7 +909,7 @@ public final class AppState: ObservableObject {
         let placeholderTitle = recordingPlaceholderTitle
         let routeNotice = lastCaptureNotice ?? captureNotice()
         defer { if let routeNotice { statusMessage += " " + routeNotice } }
-        defer { activeRecordingURL = nil; recordingMeetingId = nil; recordingUsesSystem = false; recordingPlaceholderTitle = nil }
+        defer { activeRecordingURL = nil; recordingMeetingId = nil; recordingUsesSystem = false; recordingPlaceholderTitle = nil; activeCaptureMode = nil }
         let audioURL: URL
         do {
             #if os(macOS)

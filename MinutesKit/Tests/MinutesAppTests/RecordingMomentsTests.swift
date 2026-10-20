@@ -66,3 +66,14 @@ import MinutesCalendar
         #expect(state.selectedGoogleCalendarIDs == ["primary"])
     }
 }
+
+@MainActor struct ScheduledCaptureModeTests {
+    @Test("Calendar meetings capture call audio and the microphone even when Record was last used mic-only")
+    func scheduledUsesCallAudio() {
+        #if os(macOS)
+        #expect(AppState.captureMode(scheduled: true, saved: .microphone) == .systemAndMicrophone)
+        #expect(AppState.captureMode(scheduled: true, saved: .systemAudio) == .systemAndMicrophone)
+        #endif
+        #expect(AppState.captureMode(scheduled: false, saved: .microphone) == .microphone)
+    }
+}
