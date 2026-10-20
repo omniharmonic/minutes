@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && canImport(AppKit)
 import SwiftUI
 import AppKit
+import MinutesUI
 
 @MainActor
 public final class AppStartup: ObservableObject {
@@ -131,6 +132,9 @@ public struct MinutesApp: App {
                 Button("New Recording") { startup.state?.selectedSection = .liveIngestion }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(startup.state == nil)
+                Button("Mark Moment") { startup.state?.markRecordingMoment() }
+                    .keyboardShortcut("b", modifiers: .command)
+                    .disabled(startup.state?.isRecording != true)
                 Button("Import Audio or Transcript…") { NotificationCenter.default.post(name: Notification.Name("MinutesImportAudio"), object: nil) }
                     .keyboardShortcut("i", modifiers: [.command, .shift])
                     .disabled(startup.state == nil)
@@ -138,7 +142,7 @@ public struct MinutesApp: App {
         }
         
         Settings {
-            if let state = startup.state { SettingsView(appState: state).frame(width: 640, height: 510) }
+            if let state = startup.state { SettingsView(appState: state).frame(width: 640, height: 510).toggleStyle(MinutesToggleStyle()).tint(.yellow) }
         }
 
         // Menu Bar Extra Status Item
@@ -165,6 +169,7 @@ public struct MinutesApp: App {
                             .font(.subheadline.bold())
                             .foregroundStyle(.red)
                     }
+                    Button("Mark Moment (\(appState.recordingBookmarks.count))") { appState.markRecordingMoment() }
                     Button("Stop & Process Meeting") {
                         Task {
                             await appState.stopAndProcessMeeting()
@@ -186,7 +191,7 @@ public struct MinutesApp: App {
                     }
                 }
                 
-                Button("Send meeting to Parachute") {
+                Button("Save Meeting to Parachute Vault") {
                     Task {
                         _ = await appState.exportCurrentMeeting(target: "parachute")
                     }

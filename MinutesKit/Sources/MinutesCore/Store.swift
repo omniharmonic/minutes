@@ -30,6 +30,26 @@ extension MinutesStore {
         return seeded
     }
 
+    /// Small durable library values (for example an exported note's id). Never secrets.
+    public func librarySetting(_ key: String) throws -> String? {
+        var value: String?
+        try withImmediateTransaction {
+            value = try folderStatement("SELECT value FROM library_settings WHERE key=?", values: [key]) { statement in
+                let code = sqlite3_step(statement)
+                guard code == SQLITE_ROW || code == SQLITE_DONE else { throw databaseError("Read library setting") }
+                return code == SQLITE_ROW ? sqlite3_column_text(statement, 0).map { String(cString: $0) } : nil
+            }
+        }
+        return value
+    }
+
+    public func setLibrarySetting(_ key: String, value: String?) throws {
+        try withImmediateTransaction {
+            if let value { try folderWrite("INSERT INTO library_settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", values: [key, value]) }
+            else { try folderWrite("DELETE FROM library_settings WHERE key=?", values: [key]) }
+        }
+    }
+
     private func folderStatement<T>(_ sql: String, values: [String?] = [], _ body: (OpaquePointer) throws -> T) throws -> T {
         var pointer: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &pointer, nil) == SQLITE_OK, let statement = pointer else { throw databaseError("Prepare folder operation") }
@@ -693,6 +713,7 @@ public final class MinutesStore: @unchecked Sendable {
     
     /// Latest local meetings linked by person ID, never by a matching display name.
     /// Attendance and speaker evidence remain separate; suggested links need review.
+    /// Pass `.max` for the person's full history.
     public func listMeetings(forPersonId personId: String, limit: Int = 100) throws -> [PersonMeetingHistoryEntry] {
         guard limit > 0, !personId.isEmpty else { return [] }
         lock.lock()
@@ -715,7 +736,7 @@ public final class MinutesStore: @unchecked Sendable {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { throw databaseError("Prepare person meeting history") }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_text(stmt, 1, (personId as NSString).utf8String, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_int(stmt, 2, Int32(min(limit, 100)))
+        sqlite3_bind_int64(stmt, 2, Int64(min(limit, Int(Int64.max))))
         func text(_ column: Int32) -> String? {
             guard sqlite3_column_type(stmt, column) != SQLITE_NULL, let value = sqlite3_column_text(stmt, column) else { return nil }
             return String(cString: value)

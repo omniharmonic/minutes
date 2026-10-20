@@ -12,13 +12,11 @@ import MinutesExport
 @available(macOS 15.0, iOS 18.0, *)
 public struct MainWindowView: View {
     @ObservedObject public var appState: AppState
-    @Environment(\.colorScheme) private var colorScheme
     @State private var meetingTab = MeetingTab.notes
     @State private var transcriptFindRequest = 0
+    @State private var notesFindRequest = 0
     @State private var search = ""
-    @State private var searchPresented = false
     @FocusState private var searchFocused: Bool
-    @FocusState private var libraryFocused: Bool
     @State private var importing = false
     @State private var recorderPresented = false
     @State private var measuredSidebarWidth: CGFloat = 225
@@ -30,9 +28,9 @@ public struct MainWindowView: View {
     @State private var reprocessMeetingID: String?
     @State private var creatingFolder = false
     @State private var deletingMeeting: Meeting?
+    @State private var movingMeeting: Meeting?
     @State private var deletingFolder: MeetingFolder?
     @State private var editingFolder: MeetingFolder?
-    @State private var keyboardScrollTarget: String?
     #if os(macOS)
     @Environment(\.openSettings) private var openSettings
     #endif
@@ -120,12 +118,19 @@ public struct MainWindowView: View {
             .ignoresSafeArea().allowsHitTesting(false).accessibilityHidden(true)
         }
         .tint(.yellow)
+        .toggleStyle(MinutesToggleStyle())
         .confirmationDialog("Delete meeting?", isPresented: Binding(get: { deletingMeeting != nil }, set: { if !$0 { deletingMeeting = nil } }), titleVisibility: .visible) {
             Button("Move to Recently Deleted", role: .destructive) {
                 if let meeting = deletingMeeting { perform("delete meeting") { try appState.trashMeeting(meeting.id) } }
                 deletingMeeting = nil
             }
         } message: { Text("You can restore this meeting and its recording from Recently Deleted in Settings.") }
+        .confirmationDialog("Move to folder", isPresented: Binding(get: { movingMeeting != nil }, set: { if !$0 { movingMeeting = nil } }), titleVisibility: .visible) {
+            Button("Unfiled") { if let meeting = movingMeeting { moveMeeting(meeting.id, to: nil) }; movingMeeting = nil }
+            ForEach(appState.folders) { folder in
+                Button(folder.name) { if let meeting = movingMeeting { moveMeeting(meeting.id, to: folder.id) }; movingMeeting = nil }
+            }
+        }
         .sheet(isPresented: $creatingFolder) {
             MeetingFolderEditor(title: "New Folder") { try appState.createFolder(name: $0, description: $1) }
         }
@@ -141,7 +146,7 @@ public struct MainWindowView: View {
             }
         }
         .frame(minWidth: 860, minHeight: 560)
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("MinutesFocusLibrarySearch"))) { _ in searchPresented = true; searchFocused = true }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("MinutesFocusLibrarySearch"))) { _ in searchFocused = true }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("MinutesFindInTranscript"))) { _ in
             guard appState.currentMeeting != nil else { return }
             findInTranscript()
@@ -257,51 +262,79 @@ public struct MainWindowView: View {
             }
         }
         ToolbarItem(placement: .primaryAction) {
-            HStack(spacing: 8) {
-                Menu {
-                    if appState.currentMeeting != nil {
-                        Button("Export Markdown…") { appState.prepareMarkdownExport() }
-                        Button("Send to Parachute") { Task { _ = await appState.exportCurrentMeeting(target: "parachute") } }
+            HStack(spacing: 10) {
+                if appState.selectedSection == .calendar {
+                    Button { appState.refreshCalendar() } label: {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 15, weight: .medium))
+                            .frame(width: 36, height: 36).minutesControlGlass(in: Circle(), interactive: true)
                     }
-                } label: {
-                    Label("Share meeting", systemImage: "square.and.arrow.up").foregroundStyle(.primary)
-                        .labelStyle(.iconOnly).font(.system(size: 16))
-                        .frame(width: 32, height: 28)
-                        .contentShape(Rectangle())
+                    .buttonStyle(.plain).disabled(!appState.calendarConnected || appState.googleRefreshing)
+                    .help("Refresh calendar").accessibilityLabel("Refresh calendar")
                 }
-                .controlSize(.regular)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .accessibilityLabel("Share meeting")
-
+                searchField
+                if appState.selectedSection == .meetings, let share = appState.currentShareFile {
+                    ShareLink(item: share, preview: SharePreview(appState.currentMeeting?.title ?? "Meeting")) {
+                        // The glyph's box sits low in its bounds; lift it to the optical centre.
+                        Image(systemName: "square.and.arrow.up").font(.system(size: 15, weight: .medium))
+                            .offset(y: -1.5)
+                            .frame(width: 36, height: 36).contentShape(Circle())
+                            .minutesControlGlass(in: Circle(), interactive: true)
+                    }
+                    .buttonStyle(.plain).help("Share meeting").accessibilityLabel("Share meeting")
+                }
+                if appState.selectedSection == .meetings, let meeting = appState.currentMeeting {
+                    Menu { meetingActions(meeting) } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold))
+                            .frame(width: 36, height: 36).contentShape(Circle())
+                            .minutesControlGlass(in: Circle(), interactive: true)
+                    }
+                    .buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                    .help("Meeting actions").accessibilityLabel("Meeting actions")
+                }
             }
-            .padding(.horizontal, 6).frame(height: 36).fixedSize(horizontal: true, vertical: false)
-            .minutesControlGlass(in: Capsule())
-            .accessibilityElement(children: .contain)
+            .fixedSize()
         }
-        ToolbarItem(placement: .primaryAction) {
-            HStack(spacing: 6) {
-                Button { appState.refreshCalendar() } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 15))
-                        .frame(width: 30, height: 28).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).disabled(!appState.calendarConnected || appState.googleRefreshing)
-                .help("Refresh calendar").accessibilityLabel("Refresh calendar")
-                if searchPresented || !search.isEmpty {
-                    TextField("Search meetings", text: $search).textFieldStyle(.plain).font(.system(size: 13))
-                        .frame(width: 150).focused($searchFocused).accessibilityLabel("Search meetings")
-                        .onExitCommand { search = ""; searchPresented = false }
-                    Button { search = ""; searchPresented = false } label: {
-                        Image(systemName: "xmark").font(.system(size: 11)).frame(width: 24, height: 28)
-                    }.buttonStyle(.plain).accessibilityLabel("Close search")
-                } else {
-                    Button { searchPresented = true; searchFocused = true } label: {
-                        Image(systemName: "magnifyingglass").font(.system(size: 15)).frame(width: 30, height: 28)
-                    }.buttonStyle(.plain).help("Search meetings (⌥⌘F)").accessibilityLabel("Search meetings")
-                }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+            TextField(appState.selectedSection == .calendar ? "Search events" : "Search meetings", text: $search)
+                .textFieldStyle(.plain).font(.system(size: 14))
+                .focused($searchFocused).accessibilityLabel("Search meetings")
+                .onExitCommand { search = ""; searchFocused = false }
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
-            .padding(.horizontal, 6).frame(height: 36).fixedSize(horizontal: true, vertical: false)
-            .minutesControlGlass(in: Capsule(), interactive: true)
+        }
+        .padding(.horizontal, 14).frame(width: 260, height: 36)
+        .minutesControlGlass(in: Capsule(), interactive: true)
+        .help("Search meetings (⌥⌘F)")
+    }
+
+    @ViewBuilder private func meetingActions(_ meeting: Meeting) -> some View {
+        Section("Export") {
+            Button("Export Markdown…", systemImage: "doc.badge.arrow.up") { appState.prepareMarkdownExport() }
+            Button(appState.parachuteVault.map { "Save to “\($0.vault)”" } ?? "Save to Parachute Vault…", systemImage: "tray.and.arrow.up") {
+                if appState.parachuteVault == nil { openSettings() }
+                else { Task { _ = await appState.exportCurrentMeeting(target: "parachute") } }
+            }
+        }
+        Section {
+            if !appState.currentUtterances.isEmpty {
+                Button("Search Transcript", systemImage: "magnifyingglass") { findInTranscript() }
+            }
+            if meeting.audioPath != nil && meeting.platform != "transcript_import" {
+                Button("Regenerate from Recording…", systemImage: "arrow.trianglehead.2.clockwise") { reprocessMeetingID = meeting.id; confirmingReprocess = true }
+                    .disabled(recordingBusy)
+            }
+            Menu("Move to Folder", systemImage: "folder") {
+                MeetingFolderDestinations(folders: appState.folders) { moveMeeting(meeting.id, to: $0) }
+            }
+        }
+        Section {
+            Button("Delete Meeting", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
         }
     }
 
@@ -334,62 +367,24 @@ public struct MainWindowView: View {
     private var meetingList: some View {
         VStack(spacing: 0) {
             libraryHeader.background(MinutesTheme.bg).zIndex(1)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(MeetingDateGroup.sections(for: filteredMeetings)) { group in
+            ScrollViewReader { _ in
+                // A selectable List (not a stack): trackpad swipes reveal row actions
+                // and the table owns click and arrow-key selection.
+                List(selection: $appState.selectedMeetingId) {
+                    ForEach(MeetingDateGroup.sections(for: filteredMeetings)) { group in
+                        Section {
+                            ForEach(group.meetings) { meeting in meetingRow(meeting) }
+                        } header: {
                             Text(group.title).font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 22).padding(.top, 20).padding(.bottom, 10)
-                            ForEach(group.meetings) { meeting in
-                                VStack(alignment: .leading, spacing: 3) {
-                                        Text(meeting.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                                        HStack(alignment: .firstTextBaseline, spacing: 7) {
-                                            Text(meeting.startedAt, format: .dateTime.month(.abbreviated).day())
-                                            Text(preview(meeting)).foregroundStyle(.secondary).lineLimit(1)
-                                        }.font(.system(size: 12))
-                                        Label(appState.folderName(for: meeting.id), systemImage: "folder").font(.system(size: 12)).foregroundStyle(.secondary)
-                                        if meeting.status == "failed" { Text("Needs attention").font(.caption).foregroundStyle(.orange) }
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 26).padding(.vertical, 8)
-                                    .background {
-                                        if appState.selectedMeetingId == meeting.id {
-                                            RoundedRectangle(cornerRadius: 8).fill(colorScheme == .dark ? Color(red: 0.62, green: 0.51, blue: 0.16) : Color.yellow.opacity(0.55))
-                                        }
-                                    }
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { libraryFocused = true; appState.selectedMeetingId = meeting.id }
-                                    .accessibilityAddTraits(.isButton)
-                                    .accessibilityAction { appState.selectedMeetingId = meeting.id }
-                                    .onDrag { MeetingDragTransfer.provider(meetingID: meeting.id) } preview: {
-                                        Label(meeting.title, systemImage: "note.text").font(.body).lineLimit(2).padding(12)
-                                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                                    }
-                                .padding(.leading, 10).padding(.trailing, 16)
-                                .id(meeting.id)
-                                .contextMenu {
-                                    Button("Delete Meeting", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
-                                    Menu("Move to Folder", systemImage: "folder") {
-                                        MeetingFolderDestinations(folders: appState.folders) { moveMeeting(meeting.id, to: $0) }
-                                    }
-                                }
-                                .accessibilityAddTraits(appState.selectedMeetingId == meeting.id ? [.isSelected] : [])
-                            }
+                                .foregroundStyle(.secondary).padding(.leading, 12)
                         }
-                    }.padding(.bottom, 92)
+                    }
+                    Color.clear.frame(height: 72).listRowBackground(Color.clear).listRowSeparator(.hidden)
                 }
-                .onChange(of: keyboardScrollTarget) { _, id in
-                    if let id { proxy.scrollTo(id, anchor: .center) }
-                }
-                .clipped()
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
-        .focusable()
-        .focused($libraryFocused)
-        .focusEffectDisabled()
-        .onKeyPress(.downArrow) { moveMeetingSelection(by: 1); return .handled }
-        .onKeyPress(.upArrow) { moveMeetingSelection(by: -1); return .handled }
         .background(MinutesTheme.bg)
         .navigationTitle(appState.libraryTitle)
         .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
@@ -409,13 +404,37 @@ public struct MainWindowView: View {
             if appState.activeRecordingMeetingID != id { recorderPresented = false }
         }
     }
-    private func moveMeetingSelection(by offset: Int) {
-        let meetings = MeetingDateGroup.sections(for: filteredMeetings).flatMap(\.meetings)
-        guard !meetings.isEmpty else { return }
-        let current = meetings.firstIndex(where: { $0.id == appState.selectedMeetingId }) ?? (offset > 0 ? -1 : meetings.count)
-        let next = min(meetings.count - 1, max(0, current + offset))
-        appState.selectedMeetingId = meetings[next].id
-        keyboardScrollTarget = meetings[next].id
+    private func meetingRow(_ meeting: Meeting) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(meeting.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(meeting.startedAt, format: .dateTime.month(.abbreviated).day())
+                Text(preview(meeting)).foregroundStyle(.secondary).lineLimit(1)
+            }.font(.system(size: 12))
+            Label(appState.folderName(for: meeting.id), systemImage: "folder").font(.system(size: 12)).foregroundStyle(.secondary)
+            if meeting.status == "failed" { Text("Needs attention").font(.caption).foregroundStyle(.orange) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .tag(meeting.id)
+        .onDrag { MeetingDragTransfer.provider(meetingID: meeting.id) } preview: {
+            Label(meeting.title, systemImage: "note.text").font(.body).lineLimit(2).padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 12))
+        .listRowSeparator(.hidden)
+        .id(meeting.id)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("Delete", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }.tint(.red)
+            Button("Move", systemImage: "folder") { movingMeeting = meeting }.tint(.indigo)
+        }
+        .contextMenu {
+            Button("Delete Meeting", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
+            Menu("Move to Folder", systemImage: "folder") {
+                MeetingFolderDestinations(folders: appState.folders) { moveMeeting(meeting.id, to: $0) }
+            }
+        }
     }
     private var libraryHeader: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -532,8 +551,8 @@ public struct MainWindowView: View {
                     meetingHeading(meeting)
                     if recorderPresented { recordingWorkspace.padding(.vertical, 8) }
                     meetingContent(meeting)
-                }.id(meeting.id).padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 60)
-                    .frame(maxWidth: 920).frame(maxWidth: .infinity, alignment: .center)
+                }.id(meeting.id).padding(.horizontal, 28).padding(.top, 12).padding(.bottom, 60)
+                    .frame(maxWidth: 1180).frame(maxWidth: .infinity, alignment: .center)
             }.background(MinutesTheme.document)
         } else {
             ContentUnavailableView { Label("No Meeting Selected", systemImage: "note.text") }
@@ -565,7 +584,11 @@ public struct MainWindowView: View {
             sources: AppState.CaptureMode.allCases.map(\.rawValue), includesMicrophone: appState.captureMode.includesMicrophone,
             onInstall: { Task { await appState.setupSpeechModels() } },
             onStart: { Task { if await appState.prepareRecording() { appState.startQuickMeeting() } } },
-            onStop: { Task { await appState.stopAndProcessMeeting(); recorderPresented = false } })
+            onStop: { Task { await appState.stopAndProcessMeeting(); recorderPresented = false } },
+            moments: appState.recordingBookmarks,
+            onMarkMoment: { appState.markRecordingMoment() },
+            onRenameMoment: { appState.renameBookmark($0, to: $1) },
+            onRemoveMoment: { appState.deleteBookmark($0) })
             .onAppear { appState.refreshSpeechReadiness() }
     }
     private func showRecordingWorkspace() {
@@ -664,8 +687,10 @@ public struct MainWindowView: View {
         .minutesControlGlass(in: RoundedRectangle(cornerRadius: 16))
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 16)
     }
+    /// Searches inside the transcript on the meeting page; the Transcript tab keeps its own field.
     private func findInTranscript() {
         appState.selectedSection = .meetings
+        if meetingTab == .notes { notesFindRequest += 1; return }
         meetingTab = .transcript
         transcriptFindRequest += 1
     }
@@ -688,9 +713,11 @@ public struct MainWindowView: View {
                 playbackAllowed: !appState.isRecording && !appState.isStartingRecording && !appState.isFinalizingRecording,
                 usesAppleIntelligence: appState.summaryUsesAppleIntelligence,
                 onEnableAppleSummary: { appState.summaryUsesAppleIntelligence = true; Task { await appState.generateCurrentSummary() } },
-                onFindTranscript: findInTranscript,
+                onFindTranscript: { meetingTab = .transcript; transcriptFindRequest += 1 },
                 onRegenerateRecording: { reprocessMeetingID = meeting.id; confirmingReprocess = true },
-                isProcessingRecording: appState.isProcessing || recordingBusy)
+                isProcessingRecording: appState.isProcessing || recordingBusy,
+                onRenameBookmark: { appState.renameBookmark($0, to: $1) },
+                findRequest: notesFindRequest)
         case .transcript:
             TranscriptView(utterances: appState.currentUtterances, availableSpeakers: appState.currentClusters.map(\.label), clusters: appState.currentClusters, timestampsAvailable: meeting.platform != "transcript_import", findRequest: transcriptFindRequest,
                 onSeek: { time in perform("play recording") {

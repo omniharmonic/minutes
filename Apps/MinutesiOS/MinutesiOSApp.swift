@@ -61,6 +61,7 @@ private struct IOSRootView: View {
     @State private var deletingFolder: MeetingFolder?
     @State private var folderError: String?
     @State private var deletingMeeting: Meeting?
+    @State private var movingMeeting: Meeting?
     @State private var showingTrash = false
 
     var body: some View {
@@ -102,13 +103,13 @@ private struct IOSRootView: View {
                             Button("Delete Folder", systemImage: "trash", role: .destructive) { deletingFolder = folder }
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button("Delete", systemImage: "trash", role: .destructive) { deletingFolder = folder }
+                            Button("Delete", systemImage: "trash", role: .destructive) { deletingFolder = folder }.tint(.red)
                         }
                     }
                 }
             }
             .listStyle(.insetGrouped)
-            .contentMargins(.bottom, 92, for: .scrollContent)
+            .contentMargins(.bottom, 110, for: .scrollContent)
             .onAppear { state.selectLibrary(.all) }
             .navigationTitle("Folders")
             .toolbar {
@@ -126,7 +127,9 @@ private struct IOSRootView: View {
             .overlay(alignment: .bottom) { recordingFooter }
             .navigationDestination(isPresented: $recorderPresented) { IOSRecordingNote(state: state) }
         }
+        // Primary tint keeps navigation monochrome; swipe actions set their own colours.
         .tint(.primary)
+        .toggleStyle(MinutesToggleStyle())
         .sheet(isPresented: $showingTrash) {
             RecentlyDeletedView(load: { state.store.listMeetings(inTrash: true) }, restore: { try state.restoreMeeting($0) })
         }
@@ -138,6 +141,12 @@ private struct IOSRootView: View {
                 deletingMeeting = nil
             }
         } message: { Text("You can restore this meeting and its recording from Recently Deleted in Settings.") }
+        .confirmationDialog("Move to folder", isPresented: Binding(get: { movingMeeting != nil }, set: { if !$0 { movingMeeting = nil } }), titleVisibility: .visible) {
+            Button("Unfiled") { if let meeting = movingMeeting { moveMeeting(meeting.id, to: nil) }; movingMeeting = nil }
+            ForEach(state.folders) { folder in
+                Button(folder.name) { if let meeting = movingMeeting { moveMeeting(meeting.id, to: folder.id) }; movingMeeting = nil }
+            }
+        }
         .sheet(isPresented: $creatingFolder) {
             MeetingFolderEditor(title: "New Folder") { try state.createFolder(name: $0, description: $1) }
         }
@@ -203,8 +212,8 @@ private struct IOSRootView: View {
         return state.libraryMeetings.filter { $0.title.localizedCaseInsensitiveContains(search) || ($0.userNotes?.localizedCaseInsensitiveContains(search) ?? false) || state.store.listUtterances(meetingId: $0.id).contains { $0.text.localizedCaseInsensitiveContains(search) } }
     }
     private var recordingFooter: some View {
-        RecordingLaunchButton(isRecording: state.isRecording, duration: state.recordingDuration) { recorderPresented = true }
-            .padding(16)
+        RecordingLaunchButton(isRecording: state.isRecording, duration: state.recordingDuration, style: .circle) { recorderPresented = true }
+            .padding(.bottom, 12)
     }
     private func meetingList(scope: MeetingLibraryScope) -> some View {
         List {
@@ -229,7 +238,8 @@ private struct IOSRootView: View {
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button("Delete", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
+                        Button("Delete", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }.tint(.red)
+                        Button("Move", systemImage: "folder") { movingMeeting = meeting }.tint(.indigo)
                     }
                     .contextMenu {
                         Button("Delete Meeting", systemImage: "trash", role: .destructive) { deletingMeeting = meeting }
@@ -241,7 +251,7 @@ private struct IOSRootView: View {
             } header: { Text(group.title).textCase(nil).font(.title2.bold()).foregroundStyle(.primary) }
             }
         }
-        .contentMargins(.bottom, 92, for: .scrollContent)
+        .contentMargins(.bottom, 110, for: .scrollContent)
         .navigationTitle(state.libraryTitle)
         .onAppear { state.selectLibrary(scope) }
         .navigationBarTitleDisplayMode(.inline)
@@ -397,42 +407,19 @@ private struct IOSRootView: View {
         }
     }
     @ViewBuilder private var prismSettings: some View {
-        Section("Prism") {
-            TextField("HTTPS Prism origin", text: $state.prismOrigin)
-                .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-            if !state.prismVaults.isEmpty {
-                Picker("Destination vault", selection: $state.prismVaultID) {
-                    ForEach(state.prismVaults) { vault in Text(vault.name ?? vault.id).tag(vault.id) }
-                }
-            }
-                TextField("Folder in vault", text: $state.prismDirectory)
-                Toggle("Automatically export completed meetings", isOn: $state.autoExportPrism)
-                    .disabled(state.prismVaultID.isEmpty)
-                Text("Sends the complete transcript, your notes and a successful AI summary to this vault. Failed processing and transcript highlights are not sent automatically. Each delivery has its own subfolder. Custom folders require an updated Prism server.")
-                    .font(.caption).foregroundStyle(.secondary)
-            Text(state.prismMessage).font(.footnote).foregroundStyle(.secondary)
-            Button("Connect Prism") { Task { await state.connectPrism() } }.disabled(state.prismBusy)
-            if state.canCancelPrismAuthorization {
-                Button("Cancel Sign-in") { state.cancelPrismAuthorization() }
-            }
-            Button("Verify saved connection") { Task { await state.verifyPrism() } }.disabled(state.prismBusy)
-            Button("Disconnect Prism", role: .destructive) { Task { await state.disconnectPrism() } }.disabled(state.prismBusy)
-            Button("Sync pending deliveries") { Task { await state.syncPrismOutbox() } }.disabled(state.prismBusy || !state.prismVerified)
-            Text("The server must support restricted Minutes grants. Deliveries retain their original server, vault and authorization; a new sign-in cannot adopt an older queue. Re-export a meeting explicitly after reviewing a new account.")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-        Section("Prism deliveries") {
-            ForEach(state.prismOutbox) { item in
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(state.store.getMeeting(id: item.meetingId)?.title ?? "Meeting")
-                    Text("\(item.destinationVault) · \(item.status.rawValue.replacingOccurrences(of: "_", with: " "))").font(.caption).foregroundStyle(.secondary)
-                    if let error = item.errorMessage { Text(error).font(.caption).foregroundStyle(.secondary) }
-                    if item.status != .synced && item.status != .revoked {
-                        Button("Cancel delivery", role: .destructive) { Task { await state.cancelPrismDelivery(id: item.id) } }.disabled(state.prismBusy)
+        ParachuteVaultSettings(appState: state)
+        if !state.prismOutbox.isEmpty {
+            Section("Earlier Prism deliveries") {
+                ForEach(state.prismOutbox) { item in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(state.store.getMeeting(id: item.meetingId)?.title ?? "Meeting")
+                        Text("\(item.destinationVault) · \(item.status.rawValue.replacingOccurrences(of: "_", with: " "))").font(.caption).foregroundStyle(.secondary)
+                        if item.status != .synced && item.status != .revoked {
+                            Button("Cancel delivery", role: .destructive) { Task { await state.cancelPrismDelivery(id: item.id) } }.disabled(state.prismBusy)
+                        }
                     }
                 }
             }
-            if state.prismOutbox.isEmpty { Text("No deliveries for this server.").foregroundStyle(.secondary) }
         }
     }
     private var summarySettings: some View {

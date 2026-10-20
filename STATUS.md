@@ -308,3 +308,18 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] Speakers: short (2–5 s) clusters unlike every main voice stay separate; reference call now 5 call + 2 mic speakers.
 - [x] Notes: overview, cited decisions and action items, and timed discussion sections for multi-chunk meetings.
 - [x] Owner confirmed re-transcription from compressed audio works. Compression is now automatic for every recording (including failed transcriptions) and for existing libraries after launch; interrupted recordings and imported originals are excluded. Mac 59, iOS 56.
+
+### 2026-10-19 (final polish) — sharing-ready UI, Parachute vault sign-in / Mac 60, iOS 57
+- [x] iOS swipe actions: the root `.tint(.primary)` made destructive swipe buttons white-on-white; swipe buttons now set red (Delete) and indigo (Move).
+- [x] macOS swipes: the meeting list was a lazy stack, which has no swipe actions; it is now a `List` with Delete and Move swipe actions.
+- [x] Moments: mark them live while recording (large button, ⌘B, menu bar); they appear as chips during recording, pins on the waveform scrubber, and a Moments column beside the transcript with what was said at that time. `minutes-cli bookmarks list|add|rename|delete`.
+- [x] Toggles: `MinutesToggleStyle` (whole row taps; the trailing orb fills yellow with a check) replaces switches on Mac and iOS.
+- [x] People: full meeting history (no 100 cap with `limit: .max`), searchable; `minutes-cli person-meetings --all`.
+- [x] Meeting page: waveform player (scrub, pins, mark, regenerate) → summary with real bullets and clickable timecodes (citations no longer show `[T0006]`) → transcript (inline search, open by default when wide) beside Moments (stacked when narrow) → your notes last.
+- [x] Toolbar: circular share button (system share of a Markdown file), circular ⋯ menu for Export (Markdown, Parachute vault), Search Transcript, Regenerate, Move, Delete; wider always-visible search field. Summary ⋯ menu has Search Transcript.
+- [x] iOS: Record is a large clear-glass circle; summary edit/menu, player and transcript controls are 44 pt.
+- [x] Mac icon: the bundle now ships a compiled `Assets.car` with `CFBundleIconName` (macOS 26 surfaces such as minimized-window badges); needs owner visual confirmation.
+- [x] Parachute: direct OAuth sign-in to the person's own hub and vault (see DECISIONS); no hard-coded origin.
+- [x] 406 model-free tests pass; iOS simulator build passes.
+- [ ] Owner: sign in to agent.omniharmonic.com from Settings → Connections and export one meeting; confirm the minimized-window icon.
+- [ ] Notarization needs a `notarytool` keychain profile (none on this Mac).

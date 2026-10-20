@@ -22,11 +22,14 @@ func printHelp() {
       minutes-cli trash list|move|restore [meeting-id] [--data-dir <path>]
       minutes-cli show <meeting-id>
       minutes-cli people
-      minutes-cli person-meetings <person-id> [--json] [--data-dir <path>]
+      minutes-cli person-meetings <person-id> [--all] [--json] [--data-dir <path>]
       minutes-cli voices samples <person-id> [--data-dir <path>]
       minutes-cli voices remember <person-id> <meeting-id> <cluster-id> --confirm [--data-dir <path>]
       minutes-cli folders list|seed|create|update|delete|move|meetings|classify [options] [--data-dir <path>]
       minutes-cli google auth|status|events|calendars|disconnect --config <public-client-metadata.json>
+      minutes-cli vault signin|status|verify|signout --server <parachute-host>
+      minutes-cli vault export <meeting-id> --server <parachute-host> [--folder Meetings]
+      minutes-cli bookmarks list|add|rename|delete <meeting-id> [...]
       minutes-cli prism status|verify|outbox|sync|disconnect --origin <https-origin>
       minutes-cli prism enqueue <meeting-id> --origin <https-origin> --vault <granted-vault-id>
       minutes-cli speech-regions <audio-path>
@@ -242,6 +245,8 @@ struct MinutesCLI {
             let store = try getStore(dataDir: dataDir)
 
             if cmd == "prism" { try await PrismConnectionCLI.run(arguments: args, store: store); return }
+            if cmd == "vault" { try await ParachuteVaultCLI.run(arguments: args, store: store); return }
+            if cmd == "bookmarks" { try BookmarkCLI.run(arguments: args, store: store); return }
             if cmd == "voices" { try VoiceEnrollmentCLI.run(arguments: args, store: store); return }
             if cmd == "audio" {
                 let library = dataDir ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Minutes").path
@@ -554,8 +559,8 @@ struct MinutesCLI {
                 }
                 if let s = summary {
                     print("----------------------------------------")
-                    print("Summary Overview:")
-                    print(s.overview)
+                    print("Summary:")
+                    print(SummaryCitations.readableMarkdown(s.markdown, utterances: utterances, timed: meeting.platform != "transcript_import"))
                     print("\nDecisions:")
                     for d in s.decisions { print("  * \(d)") }
                     print("\nAction Items:")
@@ -576,7 +581,7 @@ struct MinutesCLI {
                 guard store.getPerson(id: args[2]) != nil else {
                     throw NSError(domain: "MinutesCLI", code: 404, userInfo: [NSLocalizedDescriptionKey: "No local person exists with that ID."])
                 }
-                let history = try store.listMeetings(forPersonId: args[2])
+                let history = try store.listMeetings(forPersonId: args[2], limit: args.contains("--all") ? .max : 100)
                 if args.contains("--json") {
                     let encoder = JSONEncoder()
                     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -592,7 +597,7 @@ struct MinutesCLI {
                         if entry.speakerLinked && !entry.confirmedSpeaker && !entry.recognizedSpeaker { context.append("Speaker link needs review") }
                         print("\(entry.meeting.startedAt.formatted(date: .abbreviated, time: .shortened))  \(entry.meeting.title) [\(entry.id)] — \(context.joined(separator: ", "))")
                     }
-                    print("Calendar invitation does not establish that someone spoke. Up to 100 latest local meetings are shown.")
+                    print("Calendar invitation does not establish that someone spoke. \(args.contains("--all") ? "All linked local meetings are shown." : "Up to 100 latest local meetings are shown; add --all for the full history.")")
                 }
 
             case "people":

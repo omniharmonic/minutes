@@ -29,6 +29,13 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/Minutes"
 cp "$ROOT_DIR/Apps/Shared/PrivacyInfo.xcprivacy" "$RESOURCES_DIR/PrivacyInfo.xcprivacy"
 cp "$ROOT_DIR/Apps/Shared/Minutes.icns" "$RESOURCES_DIR/Minutes.icns"
+# macOS 26 reads CFBundleIconName from a compiled catalog for some surfaces
+# (for example the app badge on minimized windows); keep the .icns as fallback.
+ICON_PARTIAL_PLIST="$(mktemp -t minutes-icon).plist"
+xcrun actool --compile "$RESOURCES_DIR" --platform macosx --minimum-deployment-target 15.0 \
+    --app-icon AppIcon --output-partial-info-plist "$ICON_PARTIAL_PLIST" \
+    --warnings --errors "$ROOT_DIR/Apps/Shared/MacAssets.xcassets" >/dev/null
+[[ -f "$RESOURCES_DIR/Assets.car" ]] || { echo "Error: app icon catalog was not compiled" >&2; exit 1; }
 ditto "$ROOT_DIR/Apps/Shared/Licenses" "$RESOURCES_DIR/Licenses"
 chmod +x "$MACOS_DIR/Minutes"
 

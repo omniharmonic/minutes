@@ -35,6 +35,11 @@ private struct IOSPersonCalls: View {
     let person: Person
     @State private var history: [PersonMeetingHistoryEntry] = []
     @State private var error: String?
+    @State private var search = ""
+    private var visible: [PersonMeetingHistoryEntry] {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        return query.isEmpty ? history : history.filter { $0.meeting.title.localizedCaseInsensitiveContains(query) }
+    }
     var body: some View {
         List {
             if !person.emails.isEmpty {
@@ -45,14 +50,14 @@ private struct IOSPersonCalls: View {
                     IOSPersonVoice(state: state, personID: person.id)
                 } label: { Label("Connect or manage voice", systemImage: "waveform") }
             }
-            Section("Recent Calls") {
+            Section(history.isEmpty ? "Meetings together" : "Meetings together · \(history.count)") {
                 if let error {
                     Text(error).foregroundStyle(.secondary)
                     Button("Try Again") { refresh() }
                 } else if history.isEmpty {
                     Text("No linked calls on this device yet.").foregroundStyle(.secondary)
                 } else {
-                    ForEach(history) { entry in
+                    ForEach(visible) { entry in
                         NavigationLink { IOSMeetingDetail(state: state, meetingID: entry.meeting.id) } label: {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.meeting.title).font(.headline)
@@ -68,10 +73,11 @@ private struct IOSPersonCalls: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }.navigationTitle(person.displayName).navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $search, prompt: "Search meetings with \(person.displayName)")
             .onAppear { refresh() }.refreshable { refresh() }
     }
     private func refresh() {
-        do { history = try state.store.listMeetings(forPersonId: person.id, limit: 100); error = nil }
+        do { history = try state.store.listMeetings(forPersonId: person.id, limit: .max); error = nil }
         catch { self.error = "Could not load call history. Please try again." }
     }
     private func context(_ entry: PersonMeetingHistoryEntry) -> String {

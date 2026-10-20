@@ -162,32 +162,9 @@ public struct SettingsView: View {
 
     private var connections: some View {
         Form {
-            Section("Prism") {
-                LabeledContent("Connection") { connectionStatus(appState.prismVerified) }
-                TextField("Server", text: $appState.prismOrigin).disabled(appState.prismBusy)
-                if !appState.prismVaults.isEmpty {
-                    Picker("Vault", selection: $appState.prismVaultID) {
-                        ForEach(appState.prismVaults) { vault in Text(vault.name ?? vault.id).tag(vault.id) }
-                    }.disabled(appState.prismBusy)
-                }
-                TextField("Folder in vault", text: $appState.prismDirectory)
-                Toggle("Automatically export completed meetings", isOn: $appState.autoExportPrism)
-                    .disabled(appState.prismVaultID.isEmpty)
-                Text("Sends the complete transcript, your notes and a successful AI summary to this vault. Failed processing and transcript highlights are not sent automatically. Each delivery has its own subfolder. Custom folders require an updated Prism server.")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    Button("Connect…") { Task { await appState.connectPrism() } }
-                    Button("Verify Connection") { Task { await appState.verifyPrism() } }
-                    if appState.prismVerified || !appState.prismVaults.isEmpty {
-                        Button("Disconnect") { Task { await appState.disconnectPrism() } }
-                    }
-                    if appState.prismBusy { ProgressView().controlSize(.small) }
-                }.disabled(appState.prismBusy)
-                if appState.canCancelPrismAuthorization {
-                    Button("Cancel Sign-in") { appState.cancelPrismAuthorization() }
-                }
-                Text(appState.prismMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                if !appState.prismOutbox.isEmpty { deliveries }
+            ParachuteVaultSettings(appState: appState)
+            if !appState.prismOutbox.isEmpty {
+                Section("Earlier Prism deliveries") { deliveries }
             }
             Section("Markdown") {
                 Text("Save Markdown… opens the system file picker so you choose the name and location every time.").font(.callout).foregroundStyle(.secondary)

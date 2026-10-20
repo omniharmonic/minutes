@@ -63,6 +63,8 @@ public final class AppState: ObservableObject {
     @Published public var currentAttendees: [Person] = []
     @Published public var currentSummary: MeetingSummary? = nil
     @Published public var currentBookmarks: [Bookmark] = []
+    /// Moments marked while the active recording runs.
+    @Published public private(set) var recordingBookmarks: [Bookmark] = []
     @Published public var voiceprints: [Voiceprint] = []
     
     // Recording & Ingestion State
@@ -128,7 +130,22 @@ public final class AppState: ObservableObject {
     private var calendarGeneration = 0
     public enum CalendarSource: String, CaseIterable, Identifiable { case apple = "Apple Calendar", google = "Google Calendar"; public var id: String { rawValue } }
     @Published public var calendarSource: CalendarSource = .apple
-    @Published public var prismOrigin = "https://minutes.omniharmonic.com" {
+    /// Parachute hub address the person typed; sign-in picks the vault. Tokens live in Keychain.
+    @Published public var parachuteServer = "" {
+        didSet {
+            preferences.set(parachuteServer, forKey: "parachuteServer")
+            if oldValue != parachuteServer { parachuteVault = nil; parachuteConnection = nil; autoExportParachute = false }
+        }
+    }
+    @Published public var parachuteFolder = "Meetings" { didSet { preferences.set(parachuteFolder, forKey: "parachuteFolder") } }
+    @Published public var autoExportParachute = false { didSet { preferences.set(autoExportParachute, forKey: "autoExportParachute") } }
+    @Published public internal(set) var parachuteVault: ParachuteVaultStatus?
+    @Published public internal(set) var parachuteBusy = false
+    @Published public var parachuteMessage = "Sign in to save meetings to your Parachute vault. Meetings stay on this device until you export them."
+    var parachuteConnection: ParachuteVaultConnection?
+    var parachuteSignIn: Task<Void, Never>?
+    var parachuteSavesInFlight: Set<String> = []
+    @Published public var prismOrigin = "" {
         didSet {
             preferences.set(prismOrigin, forKey: "prismOrigin")
             if oldValue != prismOrigin { autoExportPrism = false; prismOperation += 1; prismAuthorizationTask?.cancel(); prismAuthorizationPending = false; prismBusy = false; prismConnection = nil; prismVerified = false; prismVaults = []; prismOutbox = []; prismMessage = "Server changed. Verify this connection before sending meetings." }
@@ -261,9 +278,18 @@ public final class AppState: ObservableObject {
         self.googleDesktopClientID = preferences.string(forKey: "googleDesktopClientID").flatMap { $0.isEmpty ? nil : $0 } ?? (Bundle.main.object(forInfoDictionaryKey: "GoogleDesktopClientID") as? String) ?? ""
         self.googleIOSClientID = preferences.string(forKey: "googleIOSClientID").flatMap { $0.isEmpty ? nil : $0 } ?? (Bundle.main.object(forInfoDictionaryKey: "GoogleIOSClientID") as? String) ?? ""
         self.googleCalendarIDs = preferences.string(forKey: "googleCalendarIDs") ?? "primary"
-        self.prismOrigin = preferences.string(forKey: "prismOrigin") ?? "https://minutes.omniharmonic.com"
+        self.prismOrigin = preferences.string(forKey: "prismOrigin") ?? ""
+        self.parachuteServer = preferences.string(forKey: "parachuteServer") ?? ""
+        self.parachuteFolder = preferences.string(forKey: "parachuteFolder") ?? "Meetings"
+        self.autoExportParachute = preferences.bool(forKey: "autoExportParachute")
         self.prismVaultID = preferences.string(forKey: "prismVaultID") ?? ""
         self.prismDirectory = preferences.string(forKey: "prismDirectory") ?? "Minutes"
+        // Prism settings are no longer shown, so automatic Prism delivery must not keep
+        // running invisibly. Earlier deliveries stay visible and cancellable.
+        if !preferences.bool(forKey: "prismAutoExportRetired_v1") {
+            preferences.set(false, forKey: "autoExportPrism")
+            preferences.set(true, forKey: "prismAutoExportRetired_v1")
+        }
         self.autoExportPrism = preferences.bool(forKey: "autoExportPrism")
         self.prismConnection = prismConnection
         let interruptedCount = try self.store.markAbandonedRecordingsInterrupted()
@@ -316,7 +342,7 @@ public final class AppState: ObservableObject {
         recordingPlaceholderTitle = event == nil ? meeting.title : nil
         recordingMeetingId = id
         captureSourceDirectory = directory
-        isRecording = true; recordingDuration = 0; recordingMeter.reset(level: nil)
+        isRecording = true; recordingDuration = 0; recordingMeter.reset(level: nil); recordingBookmarks = []
         captionPanel.begin()
         statusMessage = includeMicrophone
             ? "Recording call audio and microphone as separate local tracks. Use headphones to reduce echo."
@@ -739,6 +765,7 @@ public final class AppState: ObservableObject {
         #endif
         recordingDuration = 0.0
         recordingMeter.reset()
+        recordingBookmarks = []
         loadInitialData()
         selectMeeting(id: mId)
         statusMessage = "Recording microphone audio on this device."
@@ -766,6 +793,42 @@ public final class AppState: ObservableObject {
         if (recordingDuration == 0 && duration > 0) || floor(duration) != floor(recordingDuration) {
             recordingDuration = duration
         }
+    }
+
+    /// Marks the current moment of the active recording; the label can be named later.
+    @discardableResult public func markRecordingMoment(label: String = "Key moment") -> Bookmark? {
+        guard isRecording, let id = recordingMeetingId else { return nil }
+        let bookmark = Bookmark(meetingId: id, timestamp: max(0, recordingMeter.duration), label: label)
+        do {
+            try store.saveBookmark(bookmark)
+            reloadBookmarks(meetingID: id)
+            return bookmark
+        } catch {
+            statusMessage = "Could not mark this moment: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    public func renameBookmark(_ bookmark: Bookmark, to label: String) {
+        var renamed = bookmark
+        renamed.label = label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Key moment" : label
+        do { try store.saveBookmark(renamed); reloadBookmarks(meetingID: bookmark.meetingId) }
+        catch { statusMessage = "Could not rename moment: \(error.localizedDescription)" }
+    }
+
+    public func deleteBookmark(_ bookmark: Bookmark) {
+        do { try store.deleteBookmark(id: bookmark.id); reloadBookmarks(meetingID: bookmark.meetingId) }
+        catch { statusMessage = "Could not remove moment: \(error.localizedDescription)" }
+    }
+
+    public func addBookmark(meetingID: String, at seconds: Double, label: String = "Key moment") {
+        do { try store.saveBookmark(Bookmark(meetingId: meetingID, timestamp: max(0, seconds), label: label)); reloadBookmarks(meetingID: meetingID) }
+        catch { statusMessage = "Could not mark this moment: \(error.localizedDescription)" }
+    }
+
+    private func reloadBookmarks(meetingID: String) {
+        if meetingID == recordingMeetingId { recordingBookmarks = store.listBookmarks(meetingId: meetingID) }
+        if meetingID == currentMeeting?.id { currentBookmarks = store.listBookmarks(meetingId: meetingID) }
     }
 
     public func stopAndProcessMeeting() async {
@@ -1018,7 +1081,7 @@ public final class AppState: ObservableObject {
                         ? "Recording and on-device AI draft saved. Review speakers and notes before sharing."
                         : "Recording and transcript highlights saved. Enable Apple Intelligence summaries for an AI draft."
                 }
-                if apple { await automaticallyExportToPrism(meetingID: meetingID) }
+                if apple { await automaticallyExportToPrism(meetingID: meetingID); await automaticallyExportToParachute(meetingID: meetingID) }
             } else {
                 statusMessage = "Recording processed. Changes made while preparing notes were preserved."
             }
@@ -1193,7 +1256,7 @@ public final class AppState: ObservableObject {
             statusMessage = Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes)
                 ? summary.overview
                 : (apple ? "On-device AI draft saved. Review it before sharing." : "Transcript highlights saved. No AI summary was generated.")
-            if apple { await automaticallyExportToPrism(meetingID: meeting.id) }
+            if apple { await automaticallyExportToPrism(meetingID: meeting.id); await automaticallyExportToParachute(meetingID: meeting.id) }
         } catch { statusMessage = "Summary failed: \(error.localizedDescription) Your existing notes and transcript are preserved." }
     }
 
@@ -1228,7 +1291,8 @@ public final class AppState: ObservableObject {
     }
     /// Resume a stored native grant; never opens a browser or sends an email.
     public func restorePrismConnection() async {
-        guard !prismBusy, !restoringPrism else { return }
+        await restoreParachuteVault()
+        guard !prismOrigin.isEmpty, !prismBusy, !restoringPrism else { return }
         restoringPrism = true
         defer { restoringPrism = false }
         prismBusy = true
@@ -1352,7 +1416,9 @@ public final class AppState: ObservableObject {
             switch target {
             case "markdown":
                 result = try await MarkdownAdapter(outputDirectory: markdownDirectory).export(bundle: bundle)
-            case "parachute", "prism":
+            case "parachute":
+                result = try await saveToParachuteVault(meetingID: meeting.id)
+            case "prism":
                 result = try await sendToPrism(bundle)
             case "legacy-parachute":
                 result = try await ParachuteAdapter(vaultHost: parachuteHost).export(bundle: bundle)

@@ -3,10 +3,11 @@ import Foundation
 import Darwin
 import Testing
 @testable import MinutesCalendar
+import MinutesCore
 
 struct GoogleLoopbackTests {
     @Test func receivesDelayedBrowserRequest() async throws {
-        let receiver = try GoogleLoopbackReceiver()
+        let receiver = try OAuthLoopbackReceiver()
         defer { receiver.cancel() }
         let listener = Task { try await receiver.receive(expectedState: "fixture-state") }
         let redirect = receiver.redirectURI

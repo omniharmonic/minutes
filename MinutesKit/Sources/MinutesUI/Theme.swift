@@ -79,3 +79,72 @@ public extension View {
     }
 }
 #endif
+#if canImport(SwiftUI)
+import SwiftUI
+
+/// Settings choices read as a row you tap, not a switch: the trailing orb fills
+/// with the app's yellow and shows a check when the option is on.
+public struct MinutesToggleStyle: ToggleStyle {
+    public init() {}
+    public func makeBody(configuration: Configuration) -> some View {
+        MinutesToggleRow(configuration: configuration)
+    }
+}
+
+private struct MinutesToggleRow: View {
+    let configuration: ToggleStyleConfiguration
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) { configuration.isOn.toggle() }
+        } label: {
+            HStack(spacing: 12) {
+                configuration.label.frame(maxWidth: .infinity, alignment: .leading)
+                MinutesToggleOrb(isOn: configuration.isOn)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : 0.45)
+        .accessibilityRepresentation { Toggle(isOn: configuration.$isOn) { configuration.label } }
+    }
+}
+
+struct MinutesToggleOrb: View {
+    let isOn: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var body: some View {
+        ZStack {
+            Circle().fill(isOn ? Color.yellow : Color.clear)
+            Circle().strokeBorder(isOn ? Color.yellow.opacity(0.0) : Color.primary.opacity(0.28), lineWidth: 1.5)
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.black)
+                .scaleEffect(isOn ? 1 : 0.4).opacity(isOn ? 1 : 0)
+        }
+        .frame(width: 26, height: 26)
+        .background { if !isOn && !reduceTransparency { Circle().fill(.ultraThinMaterial) } }
+        .shadow(color: isOn ? Color.yellow.opacity(0.45) : .clear, radius: 6)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Pure Liquid Glass for a primary floating control such as Record.
+private struct MinutesClearGlass<S: InsettableShape>: ViewModifier {
+    let shape: S
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(MinutesTheme.card, in: shape).overlay(shape.strokeBorder(MinutesTheme.border))
+        } else if #available(macOS 26, iOS 26, *) {
+            content.glassEffect(.regular.interactive(), in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape).overlay(shape.strokeBorder(MinutesTheme.border))
+        }
+    }
+}
+public extension View {
+    func minutesClearGlass<S: InsettableShape>(in shape: S) -> some View { modifier(MinutesClearGlass(shape: shape)) }
+}
+#endif

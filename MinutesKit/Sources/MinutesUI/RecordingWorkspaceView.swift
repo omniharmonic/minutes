@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import MinutesCore
 import MinutesSpeech
 
 /// Inline recording controls. Meter samples come exclusively from the recorder.
@@ -23,11 +24,21 @@ public struct RecordingWorkspaceView: View {
     public let onInstall: () -> Void
     public let onStart: () -> Void
     public let onStop: () -> Void
+    public let moments: [Bookmark]
+    public let onMarkMoment: (() -> Void)?
+    public let onRenameMoment: ((Bookmark, String) -> Void)?
+    public let onRemoveMoment: ((Bookmark) -> Void)?
+    @State private var markPulse = 0
+    @State private var editingMoment: Bookmark?
+    @State private var momentName = ""
 
     public init(isRecording: Bool, isBusy: Bool, busyMessage: String = "Checking Recording Permissions…", canStart: Bool, modelsReady: Bool, isInstalling: Bool,
                 readinessMessage: String, statusMessage: String, routeNotice: String? = nil, meter: RecordingMeterModel,
                 source: Binding<String>, sources: [String], includesMicrophone: Bool = true, onInstall: @escaping () -> Void,
-                onStart: @escaping () -> Void, onStop: @escaping () -> Void) {
+                onStart: @escaping () -> Void, onStop: @escaping () -> Void, moments: [Bookmark] = [],
+                onMarkMoment: (() -> Void)? = nil, onRenameMoment: ((Bookmark, String) -> Void)? = nil,
+                onRemoveMoment: ((Bookmark) -> Void)? = nil) {
+        self.moments = moments; self.onMarkMoment = onMarkMoment; self.onRenameMoment = onRenameMoment; self.onRemoveMoment = onRemoveMoment
         self.isRecording = isRecording; self.isBusy = isBusy; self.busyMessage = busyMessage; self.canStart = canStart
         self.modelsReady = modelsReady; self.isInstalling = isInstalling
         self.readinessMessage = readinessMessage; self.statusMessage = statusMessage; self.routeNotice = routeNotice
@@ -46,25 +57,85 @@ public struct RecordingWorkspaceView: View {
         }
     }
     private var activeRecordingContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 18) {
             RecordingLiveReadout(meter: meter, source: source, includesMicrophone: includesMicrophone)
             if includesMicrophone, let inputDevice { Label(inputDevice.name, systemImage: "mic").font(.caption).foregroundStyle(.secondary) }
             if let routeNotice {
                 Label(routeNotice, systemImage: "arrow.triangle.2.circlepath")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Button(action: onStop) {
-                Label("Stop Recording", systemImage: "stop.fill")
-                    .font(.callout.weight(.semibold))
-                    .padding(.horizontal, 22).padding(.vertical, 12)
-                    .minutesControlGlass(in: Capsule(), interactive: true)
-                    .contentShape(Capsule())
-            }.buttonStyle(.plain).disabled(isBusy)
-                .accessibilityIdentifier("recording.stop")
-            Text("Saved on this device. Your transcript and summary follow when you stop.")
+            HStack(spacing: 12) {
+                if let onMarkMoment {
+                    Button {
+                        onMarkMoment(); markPulse += 1
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "bookmark.fill").font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.black)
+                                .frame(width: 34, height: 34).background(Color.yellow, in: Circle())
+                                .symbolEffect(.bounce, value: markPulse)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Mark this moment").font(.callout.weight(.semibold))
+                                #if os(macOS)
+                                Text("⌘B").font(.caption2).foregroundStyle(.secondary)
+                                #endif
+                            }
+                        }
+                        .padding(.leading, 8).padding(.trailing, 18).frame(minHeight: 50)
+                        .minutesControlGlass(in: Capsule(), interactive: true)
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain).disabled(isBusy || meter.duration <= 0)
+                    .sensoryFeedback(.impact(weight: .medium), trigger: markPulse)
+                    .accessibilityLabel("Mark this moment").accessibilityIdentifier("recording.mark")
+                }
+                Button(action: onStop) {
+                    Label("Stop", systemImage: "stop.fill")
+                        .font(.callout.weight(.semibold))
+                        .padding(.horizontal, 22).frame(minHeight: 50)
+                        .minutesControlGlass(in: Capsule(), interactive: true)
+                        .contentShape(Capsule())
+                }.buttonStyle(.plain).disabled(isBusy)
+                    .accessibilityLabel("Stop Recording").accessibilityIdentifier("recording.stop")
+            }
+            if !moments.isEmpty { momentStrip }
+            Text(onMarkMoment == nil ? "Saved on this device. Your transcript and summary follow when you stop."
+                 : "Mark what matters as it happens. Moments sit on the timeline and beside the transcript when you stop.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(18).minutesControlGlass(in: RoundedRectangle(cornerRadius: 20))
+        .alert("Name this moment", isPresented: Binding(get: { editingMoment != nil }, set: { if !$0 { editingMoment = nil } })) {
+            TextField("What happened?", text: $momentName)
+            Button("Save") { if let moment = editingMoment { onRenameMoment?(moment, momentName) }; editingMoment = nil }
+            if let moment = editingMoment, let onRemoveMoment {
+                Button("Remove", role: .destructive) { onRemoveMoment(moment); editingMoment = nil }
+            }
+            Button("Cancel", role: .cancel) { editingMoment = nil }
+        }
+    }
+
+    /// Marked moments as chips, newest last; tap one to name it.
+    private var momentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(moments.sorted { $0.timestamp < $1.timestamp }) { moment in
+                    Button { momentName = moment.label == "Key moment" ? "" : moment.label; editingMoment = moment } label: {
+                        HStack(spacing: 6) {
+                            Text(SummaryCitations.timecode(moment.timestamp)).font(.caption.monospacedDigit().weight(.semibold))
+                            Text(moment.label).font(.caption).lineLimit(1)
+                        }
+                        .padding(.horizontal, 12).frame(minHeight: 32)
+                        .background(Color.yellow.opacity(0.2), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.5)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(moment.label) at \(SummaryCitations.timecode(moment.timestamp))")
+                    .accessibilityHint("Name or remove this moment")
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.7), value: moments.map(\.id))
+        }
     }
     private var preRecordingContent: some View {
         VStack(spacing: 24) {
@@ -223,33 +294,62 @@ private struct RecordingActionLabelStyle: LabelStyle {
 
 @available(macOS 15.0, iOS 18.0, *)
 public struct RecordingLaunchButton: View {
+    public enum Style: Sendable { case pill, circle }
     public let isRecording: Bool
     public let duration: Double
+    public let style: Style
     public let action: () -> Void
-    public init(isRecording: Bool, duration: Double, action: @escaping () -> Void) {
-        self.isRecording = isRecording; self.duration = duration; self.action = action
+    public init(isRecording: Bool, duration: Double, style: Style = .pill, action: @escaping () -> Void) {
+        self.isRecording = isRecording; self.duration = duration; self.style = style; self.action = action
     }
     public var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
-                    .font(.system(size: 17, weight: .medium)).foregroundStyle(isRecording ? Color.red : Color.primary)
-                Text(isRecording ? "Recording" : "Record")
-                    .font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
-                if isRecording {
-                    Text(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond)))
-                        .font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(.secondary)
-                }
+            switch style {
+            case .pill: pill
+            case .circle: circle
             }
-            .padding(.horizontal, 18).padding(.vertical, 10).frame(minHeight: 44)
-            .minutesControlGlass(in: Capsule(), interactive: true)
-            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isRecording ? "Show Recording" : "Record a Meeting")
         .accessibilityValue(isRecording ? Duration.seconds(duration).formatted(.time(pattern: .minuteSecond)) : "")
         .help(isRecording ? "Show the active recording" : "Record a meeting")
         .frame(maxWidth: .infinity)
+    }
+
+    private var pill: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
+                .font(.system(size: 17, weight: .medium)).foregroundStyle(isRecording ? Color.red : Color.primary)
+            Text(isRecording ? "Recording" : "Record")
+                .font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+            if isRecording {
+                Text(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond)))
+                    .font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 10).frame(minHeight: 44)
+        .minutesControlGlass(in: Capsule(), interactive: true)
+        .contentShape(Capsule())
+    }
+
+    /// One large clear-glass disc; the red core says "record" without a word.
+    private var circle: some View {
+        ZStack {
+            if isRecording {
+                VStack(spacing: 2) {
+                    Image(systemName: "waveform").font(.system(size: 22, weight: .semibold)).foregroundStyle(.red)
+                        .symbolEffect(.variableColor.iterative, isActive: true)
+                    Text(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond)))
+                        .font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.primary)
+                }
+            } else {
+                Circle().fill(Color.red).frame(width: 30, height: 30)
+                    .shadow(color: .red.opacity(0.35), radius: 6)
+            }
+        }
+        .frame(width: 76, height: 76)
+        .minutesClearGlass(in: Circle())
+        .contentShape(Circle())
     }
 }
 #endif

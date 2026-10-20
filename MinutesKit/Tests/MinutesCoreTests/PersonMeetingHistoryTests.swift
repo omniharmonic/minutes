@@ -44,7 +44,7 @@ struct PersonMeetingHistoryTests {
         #expect(reloaded.listVoiceprints().isEmpty)
     }
 
-    @Test("History query is bounded to one hundred latest meetings with deterministic equal-date ordering")
+    @Test("History honours its limit, returns the full history on request, and orders equal dates deterministically")
     func queryLimitAndOrdering() throws {
         let store = try MinutesStore(dbPath: ":memory:")
         try store.savePerson(Person(id: "p", displayName: "Fixture"))
@@ -53,9 +53,11 @@ struct PersonMeetingHistoryTests {
             try store.saveMeeting(Meeting(id: id, title: id, startedAt: Date(timeIntervalSince1970: 1000)))
             try store.saveMeetingAttendees([MeetingAttendee(meetingId: id, personId: "p", email: "fixture@example.test")])
         }
-        let history = try store.listMeetings(forPersonId: "p", limit: 1000)
-        #expect(history.count == 100)
-        #expect(history.first?.id == "m-000" && history.last?.id == "m-099")
+        let latest = try store.listMeetings(forPersonId: "p")
+        #expect(latest.count == 100)
+        #expect(latest.first?.id == "m-000" && latest.last?.id == "m-099")
+        let full = try store.listMeetings(forPersonId: "p", limit: .max)
+        #expect(full.count == 105 && full.last?.id == "m-104")
         #expect(try store.listMeetings(forPersonId: "p", limit: 0).isEmpty)
         #expect(try store.listMeetings(forPersonId: "p", limit: -1).isEmpty)
     }

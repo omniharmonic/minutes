@@ -88,14 +88,15 @@ public final class MarkdownAdapter: ExportAdapter {
         
         if let notes=m.userNotes, !notes.isEmpty { content += "## Your notes\n\(notes)\n\n" }
         if let summary = bundle.summary {
-            content += summary.markdown
+            // Evidence ids such as [T0006] read as the time they cite.
+            let timed = m.platform != "transcript_import"
+            content += SummaryCitations.readableMarkdown(summary.markdown, utterances: bundle.utterances, timed: timed)
             // Summary content stays concise; exports retain the complete source separately.
             if !summary.markdown.contains("\n## Transcript\n") && !bundle.utterances.isEmpty {
                 content += "\n\n## Transcript\n\n"
-                for (index, utterance) in bundle.utterances.enumerated() {
-                    let reference = String(format: "T%04d", index + 1)
-                    let timing = m.platform == "transcript_import" ? "untimed" : String(format: "%.3f–%.3f s", utterance.start, utterance.end)
-                    content += "[\(reference)] **\(utterance.speakerName)** (\(timing)): \(utterance.text)\n\n"
+                for utterance in bundle.utterances {
+                    let timing = timed ? SummaryCitations.timecode(utterance.start) : "untimed"
+                    content += "**\(utterance.speakerName)** (\(timing)): \(utterance.text)\n\n"
                 }
             }
         } else {

@@ -36,7 +36,11 @@ struct IOSRecordingWorkspace: View {
             sources: [AppState.CaptureMode.microphone.rawValue],
             onInstall: { Task { await state.setupSpeechModels() } },
             onStart: { Task { if await state.prepareRecording() { state.startQuickMeeting() } } },
-            onStop: { Task { await state.stopAndProcessMeeting() } })
+            onStop: { Task { await state.stopAndProcessMeeting() } },
+            moments: state.recordingBookmarks,
+            onMarkMoment: { state.markRecordingMoment() },
+            onRenameMoment: { state.renameBookmark($0, to: $1) },
+            onRemoveMoment: { state.deleteBookmark($0) })
         .onAppear { state.refreshSpeechReadiness() }
     }
 }

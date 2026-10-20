@@ -502,9 +502,6 @@ public struct ReviewSpeakersView: View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle("Remember this voice on this device", isOn: $learnFromConfirmedVoice)
                 .font(.callout).disabled(!canRemember(cluster))
-                #if os(macOS)
-                .toggleStyle(.checkbox)
-                #endif
             Text(SpeakerReviewPresentation.rememberExplanation(cluster))
                 .font(.caption).foregroundStyle(.secondary)
             if learnFromConfirmedVoice {

@@ -10,6 +10,7 @@ struct IOSMeetingDetail: View {
     let meetingID: String
     var showsRecording = false
     @State private var transcriptFindRequest = 0
+    @State private var notesFindRequest = 0
     @State private var view = "Notes"
     @State private var moveError: String?
     @State private var confirmingRegeneration = false
@@ -67,9 +68,11 @@ struct IOSMeetingDetail: View {
                 playbackAllowed: !state.isRecording && !state.isStartingRecording && !state.isFinalizingRecording,
                             usesAppleIntelligence: state.summaryUsesAppleIntelligence,
                             onEnableAppleSummary: { state.summaryUsesAppleIntelligence = true; Task { await state.generateCurrentSummary() } },
-                            onFindTranscript: findInTranscript,
+                            onFindTranscript: { view = "Transcript"; transcriptFindRequest += 1 },
                             onRegenerateRecording: { confirmingRegeneration = true },
-                            isProcessingRecording: state.isProcessing || state.isSummarizing)
+                            isProcessingRecording: state.isProcessing || state.isSummarizing,
+                            onRenameBookmark: { state.renameBookmark($0, to: $1) },
+                            findRequest: notesFindRequest)
                     }.padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 80).id(meetingID)
                 }.background(MinutesTheme.document)
             } else { ProgressView() }
@@ -108,19 +111,36 @@ struct IOSMeetingDetail: View {
                     Label("Transcript", systemImage: "text.alignleft").tag("Transcript")
                     Label("Speakers", systemImage: "person.2").tag("Speakers")
                 }.pickerStyle(.menu).labelsHidden().accessibilityLabel("Meeting view")
+                if let share = state.currentShareFile, state.currentMeeting?.id == meetingID {
+                    ShareLink(item: share, preview: SharePreview(state.currentMeeting?.title ?? "Meeting")) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                }
                 Menu {
-                    if let path = state.currentMeeting?.audioPath, FileManager.default.fileExists(atPath: path) {
-                        ShareLink(item: URL(fileURLWithPath: path)) {
-                            Label("Share Original Audio", systemImage: "waveform")
+                    Section("Export") {
+                        Button("Save Markdown…", systemImage: "doc.badge.arrow.up") { state.prepareMarkdownExport() }
+                        Button(state.parachuteVault.map { "Save to “\($0.vault)”" } ?? "Save to Parachute Vault", systemImage: "tray.and.arrow.up") {
+                            Task { _ = await state.exportCurrentMeeting(target: "parachute") }
+                        }.disabled(state.parachuteVault == nil || state.parachuteBusy)
+                        if let path = state.currentMeeting?.audioPath, FileManager.default.fileExists(atPath: path) {
+                            ShareLink(item: URL(fileURLWithPath: path)) { Label("Share Audio", systemImage: "waveform") }
                         }
                     }
-                    if !state.currentUtterances.isEmpty {
-                        ShareLink(item: state.currentUtterances.map { "\($0.speakerName): \($0.text)" }.joined(separator: "\n\n"))
+                    Section {
+                        if !state.currentUtterances.isEmpty {
+                            Button("Search Transcript", systemImage: "magnifyingglass") { findInTranscript() }
+                        }
+                        if state.currentMeeting?.audioPath != nil && state.currentMeeting?.platform != "transcript_import" {
+                            Button("Regenerate from Recording…", systemImage: "arrow.trianglehead.2.clockwise") { confirmingRegeneration = true }
+                                .disabled(state.isProcessing || state.isRecording)
+                        }
+                        Menu("Move to Folder", systemImage: "folder") {
+                            MeetingFolderDestinations(folders: state.folders) { folderID in
+                                do { try state.moveMeeting(meetingID, to: folderID) } catch { moveError = error.localizedDescription }
+                            }
+                        }
                     }
-                    Button("Save Markdown…", systemImage: "doc.badge.arrow.up") { state.prepareMarkdownExport() }
-                    Button("Export to Prism", systemImage: "square.and.arrow.up") { Task { _ = await state.exportCurrentMeeting(target: "prism") } }.disabled(!state.prismVerified || state.prismBusy)
-                } label: { Label("Share meeting", systemImage: "square.and.arrow.up") }
-
+                } label: { Label("Meeting actions", systemImage: "ellipsis") }
             }
         }
         .meetingMarkdownExporter(state: state)
@@ -141,7 +161,9 @@ struct IOSMeetingDetail: View {
         // failed captures cannot yield a transcript or recovery copy.
         return size > 4096
     }
+    /// On the meeting page the search opens inside the transcript section.
     private func findInTranscript() {
+        if view == "Notes" { notesFindRequest += 1; return }
         view = "Transcript"
         transcriptFindRequest += 1
     }

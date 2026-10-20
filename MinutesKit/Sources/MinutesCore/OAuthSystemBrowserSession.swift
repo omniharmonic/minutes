@@ -42,6 +42,30 @@ import UIKit
             }
         }
     }
+    /// For servers that only accept web redirects: the sign-in page returns to
+    /// `receiver` on this device's loopback interface. macOS opens the default
+    /// browser (where the person is usually already signed in); iOS shows the
+    /// system sheet and closes it once the loopback callback arrives.
+    public func authorize(url: URL, loopback receiver: OAuthLoopbackReceiver, expectedState: String) async throws -> URL {
+        #if os(macOS)
+        guard NSWorkspace.shared.open(url) else { throw OAuthError.presentationUnavailable }
+        return try await withTaskCancellationHandler { try await receiver.receive(expectedState: expectedState) } onCancel: { receiver.cancel() }
+        #else
+        let sheet = Task { @MainActor in try await self.authorize(url: url, callbackScheme: "app.minutes.loopback-unused") }
+        defer { sheet.cancel() }
+        return try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: URL?.self) { group in
+                group.addTask { try await receiver.receive(expectedState: expectedState) }
+                // Closing the sheet without signing in ends the attempt.
+                group.addTask { _ = try? await sheet.value; throw OAuthError.cancelled }
+                defer { sheet.cancel(); receiver.cancel(); group.cancelAll() }
+                guard let callback = try await group.next() ?? nil else { throw OAuthError.cancelled }
+                return callback
+            }
+        } onCancel: { receiver.cancel() }
+        #endif
+    }
+
     // Safari may invoke this block on an XPC queue. Explicit Sendable
     // isolation prevents Swift from inheriting MainActor from authorize's
     // continuation closure and trapping before the Task can hop to it.

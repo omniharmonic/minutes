@@ -12,9 +12,10 @@ struct SummaryTranscriptExportTests {
         let utterance = Utterance(id: 1, meetingId: meeting.id, clusterId: "", speakerName: "Unknown", start: 0, end: 0, text: "Complete original source text remains separate.")
         let result = try await MarkdownAdapter(outputDirectory: root.path).export(bundle: .init(meeting: meeting, attendees: [], clusters: [], utterances: [utterance], summary: summary))
         let output = try String(contentsOfFile: #require(result.pathOrURL), encoding: .utf8)
-        #expect(output.contains(summary.markdown))
+        #expect(output.contains("- Short draft\n") || output.hasSuffix("- Short draft") || output.contains("- Short draft\n\n"))
+        #expect(!output.contains("[T0001]"))
         #expect(output.contains("## Transcript\n"))
-        #expect(output.contains("[T0001] **Unknown** (untimed): " + utterance.text))
+        #expect(output.contains("**Unknown** (untimed): " + utterance.text))
         #expect(output.components(separatedBy: utterance.text).count == 2)
     }
 }

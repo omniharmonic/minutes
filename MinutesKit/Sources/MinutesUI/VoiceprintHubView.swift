@@ -36,6 +36,8 @@ public struct VoiceprintHubView: View {
     @State private var confirmingVoice: VoiceEnrollmentCandidate?
     private let onOpenMeeting: ((Meeting) -> Void)?
     @State private var recentMeetings: [PersonMeetingHistoryEntry] = []
+    @State private var showingAllMeetings = false
+    @State private var meetingSearch = ""
     @State private var historyError: String?
     @State private var operationError: String?
     @State private var operationFeedback: String?
@@ -254,7 +256,7 @@ public struct VoiceprintHubView: View {
         VStack(alignment: .leading, spacing: 14) {
             Divider()
             HStack(spacing: 12) {
-                Text("Recent recorded meetings").font(.headline)
+                Text(recentMeetings.isEmpty ? "Meetings together" : "Meetings together · \(recentMeetings.count)").font(.headline)
                 Spacer(minLength: 0)
                 Button(action: refreshMeetingHistory) {
                     Image(systemName: "arrow.clockwise").font(.callout)
@@ -272,7 +274,15 @@ public struct VoiceprintHubView: View {
                 Text("Calendar invitations and speaker assignments link local recordings to this person.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                ForEach(recentMeetings) { entry in
+                if showingAllMeetings && recentMeetings.count > 6 {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search these meetings", text: $meetingSearch).textFieldStyle(.plain)
+                    }
+                    .padding(.horizontal, 12).frame(minHeight: 36)
+                    .minutesControlGlass(in: Capsule())
+                }
+                ForEach(visibleMeetings) { entry in
                     VStack(alignment: .leading, spacing: 12) {
                         if let onOpenMeeting {
                             Button { onOpenMeeting(entry.meeting) } label: {
@@ -290,10 +300,25 @@ public struct VoiceprintHubView: View {
                         Divider()
                     }
                 }
+                if recentMeetings.count > 6 {
+                    Button { withAnimation(.snappy) { showingAllMeetings.toggle(); meetingSearch = "" } } label: {
+                        Label(showingAllMeetings ? "Show recent only" : "Show all \(recentMeetings.count) meetings",
+                              systemImage: showingAllMeetings ? "chevron.up" : "list.bullet")
+                            .font(.callout.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 36)
+                            .minutesControlGlass(in: Capsule(), interactive: true)
+                    }.buttonStyle(.plain)
+                }
                 Text("A calendar invitation does not confirm attendance. Voice assignments can be reviewed in each recording.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The six latest, or every meeting with this person (optionally searched).
+    private var visibleMeetings: [PersonMeetingHistoryEntry] {
+        guard showingAllMeetings else { return Array(recentMeetings.prefix(6)) }
+        let query = meetingSearch.trimmingCharacters(in: .whitespaces)
+        return query.isEmpty ? recentMeetings : recentMeetings.filter { $0.meeting.title.localizedCaseInsensitiveContains(query) }
     }
 
     private func meetingHistoryLabel(_ entry: PersonMeetingHistoryEntry) -> some View {
@@ -329,7 +354,8 @@ public struct VoiceprintHubView: View {
             recentMeetings = []; historyError = nil; return
         }
         do {
-            recentMeetings = try store.listMeetings(forPersonId: personID, limit: 20)
+            recentMeetings = try store.listMeetings(forPersonId: personID, limit: .max)
+            showingAllMeetings = false; meetingSearch = ""
             historyError = nil
         } catch {
             recentMeetings = []

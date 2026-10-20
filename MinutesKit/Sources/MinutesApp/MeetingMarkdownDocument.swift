@@ -40,3 +40,37 @@ public extension View {
     }
 }
 #endif
+#if canImport(SwiftUI)
+import CoreTransferable
+import MinutesExport
+
+/// What the system share sheet sends: the meeting as a Markdown file, written
+/// to a temporary location only when the person picks a destination.
+@available(macOS 15, iOS 18, *)
+public struct MeetingShareFile: Transferable, Sendable {
+    public let filename: String
+    public let markdown: String
+    public static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: MeetingMarkdownDocument.writableContentTypes[0]) { file in
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("minutes-share-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(file.filename)
+            try Data(file.markdown.utf8).write(to: url, options: .atomic)
+            return SentTransferredFile(url)
+        }
+        DataRepresentation(exportedContentType: .plainText) { Data($0.markdown.utf8) }
+    }
+}
+
+@available(macOS 15, iOS 18, *)
+public extension AppState {
+    /// The selected meeting, ready for the share sheet.
+    var currentShareFile: MeetingShareFile? {
+        guard let meeting = currentMeeting else { return nil }
+        let bundle = MeetingExportBundle(meeting: meeting, attendees: currentAttendees,
+            clusters: currentClusters, utterances: currentUtterances, summary: currentSummary)
+        let title = meeting.title.components(separatedBy: CharacterSet(charactersIn: "/:\\\n\r")).joined(separator: "-")
+        return MeetingShareFile(filename: String(title.prefix(120)) + ".md", markdown: MarkdownAdapter.render(bundle: bundle))
+    }
+}
+#endif
