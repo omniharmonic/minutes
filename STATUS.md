@@ -344,3 +344,5 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 2026-10-21: iOS recording Live Activity (`MinutesLiveActivity` extension: timer, waveform, title, optional caption line, Stop and Moment intents; throttled to ~1 update/s) and optional on-device live captions on iPhone (Settings → Live captions; scrolling view in the recording screen). Pure logic in the new `MinutesActivity` module with Swift Testing coverage. `swift test` and the iOS Simulator build pass; physical-device Live Activity and locked-phone caption behaviour are not yet validated.
 
 2026-10-21: Live caption speaker grouping recalibrated. On the owner's 2h10m three-speaker recording, minutes-cli caption-voice-file produced 64 anonymous groups before and 3 after. Version bumped to Mac 71 / iOS 62.
+
+2026-10-21: Mac 71 published (v1.0.0-71, appcast serves 71). iOS 62 uploaded, delivery 8ded76c5-87a4-492d-ac13-f40090c9b56f; owner adds it to Minutes Public Beta and submits it for review. A development build of 62 is installed on the owner's iPhone.
