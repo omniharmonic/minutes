@@ -157,3 +157,8 @@ A 2h10m iPhone voice note took about 7.5 hours to transcribe because iOS suspend
 - When the model is busy, Minutes waits and retries (3, 6, 12, 24 and 30 seconds) before giving up.
 - A summary that still fails is remembered and runs again automatically the next time the app is active, on Mac and iPhone. A summary written by hand or a deleted meeting cancels it.
 - Summary chunk size follows `SystemLanguageModel.contextSize`, never below the 2,800 bytes that fit a 4,096-token context. Larger contexts on newer systems mean fewer requests per long meeting.
+
+
+## 2026-10-21: iOS Live Activity in a dependency-free module; captions reuse Apple Speech
+
+Ship the recording Live Activity as a WidgetKit extension that links only a new `MinutesActivity` module, so the extension stays small and cannot pull in speech or diarization stacks. App Intents live as source shared by both targets (not in the package) so App Intents metadata extraction sees them in the app; `perform` runs in the app process and forwards to handlers bound to the existing AppState actions. Updates are throttled to about one per second and only on visible change; the timer is date-anchored so it ticks without updates. iOS captions reuse the Mac on-device Apple Speech preview rather than a new model, stay opt-in and disposable, and fail closed when local recognition is unavailable. Not yet validated on a physical device: Live Activity rendering and buttons, recognition while the phone is locked, and battery cost.

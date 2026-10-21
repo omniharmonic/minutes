@@ -21,6 +21,8 @@ let package = Package(
         .library(name: "MinutesExport", targets: ["MinutesExport"]),
         .library(name: "MinutesUI", targets: ["MinutesUI"]),
         .library(name: "MinutesSync", targets: ["MinutesSync"]),
+        // Live Activity state shared with the iOS widget extension; no dependencies.
+        .library(name: "MinutesActivity", targets: ["MinutesActivity"]),
         .executable(name: "MinutesApp", targets: ["MinutesApp"]),
         .executable(name: "minutes-cli", targets: ["minutes-cli"])
     ],
@@ -36,6 +38,7 @@ let package = Package(
             cSettings: [],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
+        .target(name: "MinutesActivity", dependencies: []),
         .target(
             name: "MinutesSpeech",
             dependencies: ["MinutesCore", "MinutesSpeakerID", .product(name: "FluidAudio", package: "FluidAudio")]
@@ -127,6 +130,7 @@ let package = Package(
             name: "MinutesExportTests",
             dependencies: ["MinutesExport"]
         ),
+        .testTarget(name: "MinutesActivityTests", dependencies: ["MinutesActivity"]),
         .testTarget(
             name: "MinutesSyncTests",
             dependencies: ["MinutesSync"]

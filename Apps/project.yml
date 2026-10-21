@@ -37,7 +37,11 @@ targets:
       - path: ../MinutesKit/Sources/MinutesApp/WelcomeView.swift
       - path: ../MinutesKit/Sources/MinutesApp/MeetingMarkdownDocument.swift
       - path: ../MinutesKit/Sources/MinutesApp/FolderLibrary.swift
+      - path: Shared/LiveActivity
     dependencies:
+      - target: MinutesLiveActivity
+      - package: MinutesKit
+        product: MinutesActivity
       - package: MinutesKit
         product: MinutesCore
       - package: MinutesKit
@@ -88,7 +92,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: Record meeting audio on this device when you tap Record.
-        NSSpeechRecognitionUsageDescription: Transcribe saved meeting audio using on-device speech recognition.
+        NSSpeechRecognitionUsageDescription: Transcribe saved meeting audio, and show optional live captions, using on-device speech recognition.
+        NSSupportsLiveActivities: true
         NSCalendarsFullAccessUsageDescription: Connect meetings and invitees from the calendars you configure on this device.
         NSCalendarsUsageDescription: Connect meetings from calendars configured on this device.
         UILaunchScreen: {}
@@ -101,6 +106,35 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+  # Lock Screen / Dynamic Island recording Live Activity. Links only the
+  # dependency-free MinutesActivity module (no speech or diarization stacks).
+  MinutesLiveActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: MinutesLiveActivity
+      - path: Shared/LiveActivity
+    dependencies:
+      - package: MinutesKit
+        product: MinutesActivity
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.minutes.ios.LiveActivity
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+    info:
+      path: MinutesLiveActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Minutes Live Activity
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
 schemes:
   MinutesiOS:
     build:

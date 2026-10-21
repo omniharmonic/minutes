@@ -13,6 +13,8 @@ public struct LiveCaptionHistory: Sendable {
     public private(set) var lines: [Line] = []
     public let limit: Int
     public init(limit: Int = 200) { self.limit = max(1, limit) }
+    /// Newest caption text (lines stay in recognition order), partial or final.
+    public var latestText: String? { lines.last?.text }
     public mutating func update(id: String, text: String, source: String, isFinal: Bool, order: Int? = nil) {
         let text = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4000))
         guard !text.isEmpty else {

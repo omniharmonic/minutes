@@ -46,3 +46,13 @@ struct LiveCaptionHistoryTests {
     history.update(id: "new", text: "", source: "Mac audio", isFinal: false, order: 4)
     #expect(history.lines.map(\.id) == ["old-tail"])
 }
+
+@Test func latestTextFollowsRecognitionOrder() {
+    var history = LiveCaptionHistory()
+    #expect(history.latestText == nil)
+    history.update(id: "b", text: "second", source: "Microphone", isFinal: false, order: 1)
+    history.update(id: "a", text: "first", source: "Microphone", isFinal: true, order: 0)
+    #expect(history.latestText == "second")
+    history.update(id: "b", text: "second, revised", source: "Microphone", isFinal: false)
+    #expect(history.latestText == "second, revised")
+}
