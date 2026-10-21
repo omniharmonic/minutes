@@ -149,3 +149,8 @@ The system capture service now restarts its stream with the current default micr
 **Continue Recording** (meeting ⋯ menu on Mac and iOS) records a new part and, on stop, joins it to the meeting's audio. The joined audio is verified against the parts' total length. Moments from the new part are shifted by the earlier length, the temporary part is removed, and the whole meeting is transcribed again; notes are kept.
 
 Microphone-only capture already restarts its audio engine on route changes and interruptions, and saves what it recorded if it gives up.
+
+
+## 2026-10-21: iOS Live Activity in a dependency-free module; captions reuse Apple Speech
+
+Ship the recording Live Activity as a WidgetKit extension that links only a new `MinutesActivity` module, so the extension stays small and cannot pull in speech or diarization stacks. App Intents live as source shared by both targets (not in the package) so App Intents metadata extraction sees them in the app; `perform` runs in the app process and forwards to handlers bound to the existing AppState actions. Updates are throttled to about one per second and only on visible change; the timer is date-anchored so it ticks without updates. iOS captions reuse the Mac on-device Apple Speech preview rather than a new model, stay opt-in and disposable, and fail closed when local recognition is unavailable. Not yet validated on a physical device: Live Activity rendering and buttons, recognition while the phone is locked, and battery cost.
