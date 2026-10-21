@@ -85,6 +85,7 @@ private final class CaptionPanel: NSPanel {
                             guard let evidence = result.speakerEvidence,
                                   let group = self.anonymousSpeakers.label(for: evidence) else { continue }
                             if self.model.speakerGroups.count >= 200 { self.model.speakerGroups.removeAll() }
+                            self.relabelMergedGroups()
                             self.model.speakerGroups[window.id] = group
                             var label = group
                             if let personID = result.personID,
@@ -110,6 +111,20 @@ private final class CaptionPanel: NSPanel {
             }, notice: { [weak self] message in if self?.model.recording == true { self?.model.status = message } })
         } catch { model.recording = false; model.status = "Captions unavailable: \(error.localizedDescription)" }
         present()
+    }
+    /// Groups can merge once more of a voice is heard; earlier captions follow.
+    private func relabelMergedGroups() {
+        for (windowID, old) in model.speakerGroups {
+            let current = anonymousSpeakers.resolve(old)
+            guard current != old else { continue }
+            if model.manualNames[current] == nil, let name = model.manualNames[old] { model.manualNames[current] = name }
+            model.speakerGroups[windowID] = current
+            // Leave captions that show a remembered person's name alone.
+            guard pendingNames[windowID] == nil || pendingNames[windowID] == old || pendingNames[windowID] == model.manualNames[old] else { continue }
+            let label = model.manualNames[current] ?? current
+            pendingNames[windowID] = label
+            model.history.identify(id: windowID, name: label)
+        }
     }
     func finish() {
         demoTask?.cancel(); demoTask = nil

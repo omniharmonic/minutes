@@ -162,3 +162,20 @@ A 2h10m iPhone voice note took about 7.5 hours to transcribe because iOS suspend
 ## 2026-10-21: iOS Live Activity in a dependency-free module; captions reuse Apple Speech
 
 Ship the recording Live Activity as a WidgetKit extension that links only a new `MinutesActivity` module, so the extension stays small and cannot pull in speech or diarization stacks. App Intents live as source shared by both targets (not in the package) so App Intents metadata extraction sees them in the app; `perform` runs in the app process and forwards to handlers bound to the existing AppState actions. Updates are throttled to about one per second and only on visible change; the timer is date-anchored so it ticks without updates. iOS captions reuse the Mac on-device Apple Speech preview rather than a new model, stay opt-in and disposable, and fail closed when local recognition is unavailable. Not yet validated on a physical device: Live Activity rendering and buttons, recognition while the phone is locked, and battery cost.
+
+## 2026-10-21: Live caption speakers use running voice averages, calibrated on real audio
+Live captions showed 60+ speakers on calls with 3–7 people. The old rule only matched a new caption window if it was ≥0.90 similar to a single stored window, with a 0.12 margin over the runner-up. Calibrating with the live matcher on the owner's 2h10m three-speaker recording (779 windows, with the offline speaker groups as reference) found:
+- windows from the same speaker have a median similarity of 0.74 (95% of pairs are below 0.83);
+- windows from different speakers have a median of 0.18 (95% below 0.39).
+
+So the old rule hit its 64-group cap and labelled only 14% of windows.
+
+Each anonymous group now keeps a running average of its voice:
+- a window joins the closest group at ≥0.55;
+- it starts a new group only below 0.40, and stays unnamed in between;
+- groups whose averages reach ≥0.65 merge, and earlier captions follow the merge;
+- there are at most 12 groups.
+
+On the same recording this gives 3 groups, 99.6% of windows in the right group and 99.1% labelled. The embedding dump used for calibration was deleted afterwards. Final, saved transcripts use the offline diarizer, which was already correct (e.g. 4 groups for a 5-invitee call).
+
+Still open: a third of windows contain a turn change or no clear speech and get no speaker evidence at all.
