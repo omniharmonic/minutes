@@ -43,6 +43,13 @@ assert info.get('CFBundleIcons', {}).get('CFBundlePrimaryIcon', {}).get('CFBundl
 privacy = plistlib.loads((app / 'PrivacyInfo.xcprivacy').read_bytes())
 assert privacy.get('NSPrivacyTracking') is False
 assert (app / 'FluidAudio_FluidAudio.bundle').is_dir(), 'Missing speech resources'
+assert info.get('NSSupportsLiveActivities') is True
+extension = app / 'PlugIns' / 'MinutesLiveActivity.appex'
+ext_info = plistlib.loads((extension / 'Info.plist').read_bytes())
+assert ext_info['CFBundleIdentifier'] == 'app.minutes.ios.LiveActivity'
+assert ext_info['CFBundleVersion'] == sys.argv[2]
+assert ext_info['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.widgetkit-extension'
+assert not (extension / 'FluidAudio_FluidAudio.bundle').exists(), 'Live Activity must not carry speech stacks'
 print('Archive identity, version, privacy, audio mode, ATS, icons and resources passed.')
 print('Required device capabilities:', info.get('UIRequiredDeviceCapabilities', '(none declared)'))
 PY

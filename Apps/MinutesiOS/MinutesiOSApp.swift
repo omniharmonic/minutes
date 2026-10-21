@@ -11,6 +11,8 @@ import UniformTypeIdentifiers
 private final class IOSStartup: ObservableObject {
     @Published var state: AppState?
     @Published var error: String?
+    /// Live Activity and live captions; created once alongside the library.
+    private(set) var liveSurface: IOSLiveRecordingSurface?
 
     init() { retry() }
     func retry() {
@@ -20,6 +22,7 @@ private final class IOSStartup: ObservableObject {
             #else
             state = try AppState()
             #endif
+            if let state, liveSurface == nil { liveSurface = IOSLiveRecordingSurface(state: state) }
             error = nil
         }
         catch { self.error = error.localizedDescription }
@@ -32,8 +35,8 @@ struct MinutesiOSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if let state = startup.state {
-                IOSRootView(state: state)
+            if let state = startup.state, let surface = startup.liveSurface {
+                IOSRootView(state: state).environmentObject(surface.captions)
             } else {
                 ContentUnavailableView {
                     Label("Library unavailable", systemImage: "externaldrive.badge.exclamationmark")
@@ -343,6 +346,7 @@ private struct IOSRootView: View {
                         }.disabled(state.isSettingUpSpeechModels || state.isProcessing)
                         Text("Setup downloads the trained speaker models once. Processing uses installed models and Apple on-device speech. Speaker names remain yours to confirm.").font(.footnote)
                     }
+                    IOSLiveCaptionSetting()
                     Section("Meeting folders") {
                         Button("Recently Deleted", systemImage: "trash") { showingTrash = true }
                         NavigationLink {
