@@ -667,6 +667,10 @@ public struct MainWindowView: View {
                     else { ProgressView().controlSize(.small) }
                 } else { Image(systemName: "info.circle").foregroundStyle(.secondary) }
                 Text(statusTitle).font(.headline)
+                if isActive, !appState.isRecording, let progress = appState.processingProgress {
+                    Text("\(appState.processingPhase) · \(progress.formatted(.percent.precision(.fractionLength(0))))")
+                        .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
                 if appState.isRecording {
                     Text(Duration.seconds(appState.recordingDuration).formatted(.time(pattern: .minuteSecond)))

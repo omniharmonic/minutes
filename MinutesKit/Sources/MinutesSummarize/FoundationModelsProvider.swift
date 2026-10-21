@@ -23,11 +23,26 @@ public enum LocalSummaryAvailability: Equatable, Sendable {
 public struct FoundationModelsProvider: LLMProvider {
     public let id = "apple-foundation-models-on-device"
     public let isLocal = true
-    // Conservative UTF-8 upper bound, including instructions and prompt. This
-    // leaves space in the 26.x 4096-token context for output and framing. Apple's
-    // tokenization is model-dependent; a context failure is surfaced, not hidden.
-    public let maximumInputBytes = 2_800
-    public init() {}
+    // Conservative UTF-8 upper bound, including instructions and prompt: about
+    // one byte per token, leaving room for output and framing. 2,800 fits the
+    // 26.x 4096-token context; newer systems report a larger context, so long
+    // meetings need fewer requests. A context failure is surfaced, not hidden.
+    public var maximumInputBytes: Int { Self.inputBudget(contextTokens: Self.contextTokens()) }
+    /// Waits before retrying a busy (rate-limited) model. Apple limits requests
+    /// from apps in the background, which a long meeting quickly reaches.
+    let busyRetryDelays: [Duration]
+    public init(busyRetryDelays: [Duration] = [.seconds(3), .seconds(6), .seconds(12), .seconds(24), .seconds(30)]) {
+        self.busyRetryDelays = busyRetryDelays
+    }
+
+    static func inputBudget(contextTokens: Int) -> Int { max(2_800, contextTokens - 1_300) }
+
+    static func contextTokens() -> Int {
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) { return SystemLanguageModel.default.contextSize }
+        #endif
+        return 4_096
+    }
 
     /// A saved choice always wins. Eligible fresh installations use the local model.
     public static func initialPreference(savedChoice: Bool?, availability: LocalSummaryAvailability) -> Bool {
@@ -53,6 +68,21 @@ public struct FoundationModelsProvider: LLMProvider {
     }
 
     public func generate(system: String, prompt: String) async throws -> String {
+        try await Self.retryingBusy(delays: busyRetryDelays) { try await generateOnce(system: system, prompt: prompt) }
+    }
+
+    /// Retries `operation` after each delay while the model reports it is busy.
+    static func retryingBusy<T>(delays: [Duration], _ operation: () async throws -> T) async throws -> T {
+        var remaining = delays[...]
+        while true {
+            do { return try await operation() }
+            catch LocalSummaryProviderError.busy where !remaining.isEmpty {
+                try await Task.sleep(for: remaining.removeFirst())
+            }
+        }
+    }
+
+    private func generateOnce(system: String, prompt: String) async throws -> String {
         let status = Self.availability()
         guard status == .available else { throw LocalSummaryProviderError.unavailable(status) }
         guard system.utf8.count + prompt.utf8.count <= maximumInputBytes else { throw SummaryError.contextBudgetTooSmall }

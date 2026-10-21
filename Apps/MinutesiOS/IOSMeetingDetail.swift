@@ -82,7 +82,17 @@ struct IOSMeetingDetail: View {
         .onAppear { state.selectMeeting(id: meetingID) }
         .safeAreaInset(edge: .bottom) {
             if state.isProcessing || state.isSummarizing || state.isFinalizingRecording {
-                HStack(spacing: 10) { ProgressView().controlSize(.small); Text(state.statusMessage).font(.caption) }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) { ProgressView().controlSize(.small); Text(state.statusMessage).font(.caption) }
+                    if let progress = state.processingProgress {
+                        ProgressView(value: progress) {
+                            Text("\(state.processingPhase) · \(progress.formatted(.percent.precision(.fractionLength(0))))")
+                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                        Text("You can leave Minutes; processing continues in the background.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
                     .padding(14).frame(maxWidth: .infinity)
                     .minutesControlGlass(in: RoundedRectangle(cornerRadius: 20))
                     .padding(.horizontal, 16).padding(.bottom, 12)

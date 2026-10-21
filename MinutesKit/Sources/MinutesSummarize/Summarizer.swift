@@ -84,7 +84,8 @@ public final class Summarizer: Sendable {
             // the gap is disclosed in the notes instead.
             var parts: [String] = []
             var lastMiss: (any Error)?
-            for prompt in prompts {
+            for (index, prompt) in prompts.enumerated() {
+                ProcessingProgress.report(0.6 * Double(index) / Double(prompts.count), phase: "Writing notes")
                 do {
                     let notes = try await Self.generateValidated(provider: provider, instructions: instructions, prompt: prompt)
                     parts.append(notes)
@@ -104,12 +105,15 @@ public final class Summarizer: Sendable {
                 // citations; if reduction stops early, the latest is the shortest.
                 var latestLevel: [String]?
                 var converged = false
-                for _ in 0..<6 {
+                for level in 0..<6 {
                     let reductions = try await SummaryEvidence.fittingPrompts(records: drafts, title: title, template: template,
                         instructions: reduction, provider: provider)
                     Self.logger.info("Reducing \(drafts.count, privacy: .public) draft records in \(reductions.count, privacy: .public) chunks")
                     var combined: [String] = []
-                    for prompt in reductions {
+                    for (index, prompt) in reductions.enumerated() {
+                        // Each level is smaller than the last; give the first the most room.
+                        let levelStart = 0.6 + 0.25 * (1 - pow(0.5, Double(level)))
+                        ProcessingProgress.report(levelStart + 0.25 * pow(0.5, Double(level + 1)) * Double(index) / Double(reductions.count), phase: "Combining notes")
                         do { combined.append(try await Self.generateValidated(provider: provider, instructions: reduction, prompt: prompt)) }
                         catch where Self.isChunkLevelMiss(error) {
                             // These inputs already passed citation checks; carry
@@ -135,7 +139,9 @@ public final class Summarizer: Sendable {
                 // From section-level notes where they exist: on raw transcript
                 // chunks the local model copied speech ("Yeah", run-on quotes)
                 // instead of stating outcomes. Notes keep owners and source IDs.
-                for prompt in sections.isEmpty ? prompts : sections.map(\.prompt) {
+                let outcomePrompts = sections.isEmpty ? prompts : sections.map(\.prompt)
+                for (index, prompt) in outcomePrompts.enumerated() {
+                    ProcessingProgress.report(0.85 + 0.15 * Double(index) / Double(outcomePrompts.count), phase: "Finding decisions and next steps")
                     outcomes += await Self.extractOutcomes(provider: provider, prompt: prompt)
                 }
             }

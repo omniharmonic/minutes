@@ -93,7 +93,10 @@ public struct MinutesApp: App {
                         .onAppear { applicationDelegate.state = appState }
                         .task { await appState.restoreCalendarConnections() }
                         .task { await appState.restorePrismConnection() }
-                        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in appState.syncLibraryNow() }
+                        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                            appState.syncLibraryNow()
+                            Task { await appState.resumePendingSummaries() }
+                        }
                 } else {
                     VStack(spacing: 16) {
                         Text("Minutes could not open your library").font(.headline)

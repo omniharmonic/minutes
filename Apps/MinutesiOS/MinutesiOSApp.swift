@@ -51,6 +51,7 @@ private struct IOSRootView: View {
     @ObservedObject var state: AppState
     @Environment(\.scenePhase) private var scenePhase
     private var processingNeedsScreen: Bool { state.isProcessing || state.isSummarizing || state.isFinalizingRecording }
+    @State private var continuedProcessing: ContinuedProcessing?
     @State private var importing = false
     @State private var search = ""
     @State private var recorderPresented = false
@@ -170,10 +171,15 @@ private struct IOSRootView: View {
         } message: { Text(folderError ?? "") }
         .onChange(of: processingNeedsScreen, initial: true) { _, busy in
             UIApplication.shared.isIdleTimerDisabled = busy && scenePhase == .active
+            if continuedProcessing == nil { continuedProcessing = ContinuedProcessing(state: state) }
+            continuedProcessing?.busyChanged(busy)
         }
         .onChange(of: scenePhase) { _, phase in
             UIApplication.shared.isIdleTimerDisabled = processingNeedsScreen && phase == .active
-            if phase == .active { state.syncLibraryNow() }
+            if phase == .active {
+                state.syncLibraryNow()
+                Task { await state.resumePendingSummaries() }
+            }
             #if DEBUG
             ProcessingAcceptance.record("scene-\(phase)", state: state)
             #endif

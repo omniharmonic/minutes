@@ -104,9 +104,12 @@ public final class PipelineOrchestrator: Sendable {
                 let names = Dictionary(uniqueKeysWithValues: speakerNames.compactMap { key, name -> (String, String)? in
                     key.hasPrefix(prefix) ? (String(key.dropFirst(prefix.count)), name) : nil
                 })
+                let share = Double(results.count + weakSources.count) / Double(sources.count)
                 do {
-                    let result = try await process(meetingId: meetingId, audioURL: url,
-                        fallbackTranscriptURL: fallbackTranscriptURL, speakerNames: names, config: config)
+                    let result = try await ProcessingProgress.within(share...(share + 1 / Double(sources.count))) {
+                        try await process(meetingId: meetingId, audioURL: url,
+                            fallbackTranscriptURL: fallbackTranscriptURL, speakerNames: names, config: config)
+                    }
                     results.append((source, result))
                 } catch let error as TranscriptCoverageError {
                     // A muted microphone picking up room noise must not discard
@@ -122,19 +125,26 @@ public final class PipelineOrchestrator: Sendable {
             throw ASRError.transcriptionFailed("Plain text has no verified audio timestamps. Import it as an untimed transcript instead.")
         }
         // 1. Decode audio into 16kHz mono float32 samples
+        ProcessingProgress.report(0, phase: "Reading audio")
         let decoded = try AudioDecoder.decode(fileURL: audioURL, targetSampleRate: 16000.0)
+        ProcessingProgress.report(0.03, phase: "Finding speakers")
         
         // Model availability is checked before ASR so a missing setup never
         // prompts for speech permission and then fails after transcription.
-        let diarizationResult = try await diarizationService.diarize(
-            samples: decoded.samples, sampleRate: decoded.sampleRate,
-            meetingId: meetingId, config: config
-        )
+        let diarizationResult = try await ProcessingProgress.within(0.03...0.2) {
+            // Speaker models run about 60x faster than real time on device.
+            try await ProcessingProgress.estimating(expectedSeconds: decoded.duration / 60, phase: "Finding speakers") {
+                try await diarizationService.diarize(samples: decoded.samples, sampleRate: decoded.sampleRate,
+                    meetingId: meetingId, config: config)
+            }
+        }
         Self.logger.info("Diarized \(decoded.duration, privacy: .public)s audio: \(diarizationResult.segments.count, privacy: .public) segments, \(diarizationResult.speechDuration, privacy: .public)s speech")
-        let transcription = try await SpeechWindows.transcribeWithCoverage(
-            audio: decoded, segments: diarizationResult.segments,
-            backend: asrService, fallbackTranscriptURL: fallbackTranscriptURL
-        )
+        let transcription = try await ProcessingProgress.within(0.2...0.98) {
+            try await SpeechWindows.transcribeWithCoverage(
+                audio: decoded, segments: diarizationResult.segments,
+                backend: asrService, fallbackTranscriptURL: fallbackTranscriptURL
+            )
+        }
         let words = transcription.words
 
         // 4. Merge words and diarization segments into speaker-attributed utterances

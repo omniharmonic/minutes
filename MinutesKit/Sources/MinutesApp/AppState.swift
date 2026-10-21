@@ -98,6 +98,7 @@ public final class AppState: ObservableObject {
     public var recordingLevel: Float { recordingMeter.level ?? 0 }
     @Published public var isProcessing: Bool = false {
         didSet {
+            updateProgressLifetime()
             // Processing is the only reader that compaction must not race.
             guard oldValue, !isProcessing, !pendingCompactions.isEmpty else { return }
             let ids = Array(pendingCompactions); pendingCompactions = []
@@ -110,7 +111,10 @@ public final class AppState: ObservableObject {
     @Published public var isSettingUpSpeechModels = false
     @Published public var speechModelStatus = "Check local model availability before recording."
 
-    @Published public var isSummarizing = false
+    @Published public var isSummarizing = false { didSet { updateProgressLifetime() } }
+    /// Overall progress (0...1) of the running processing or summary job, nil when idle.
+    @Published public private(set) var processingProgress: Double?
+    @Published public private(set) var processingPhase = ""
     @Published public var summaryUsesAppleIntelligence = false { didSet { preferences.set(summaryUsesAppleIntelligence, forKey: "summaryUsesAppleIntelligence") } }
     @Published public var summaryTemplate: SummaryTemplate = .general { didSet { preferences.set(summaryTemplate.rawValue, forKey: "summaryTemplate") } }
     // Settings
@@ -978,7 +982,7 @@ public final class AppState: ObservableObject {
         }
         if FileManager.default.fileExists(atPath: audioURL.path) {
             do {
-                let result = try await processAudio(mId, audioURL, diarizationConfig)
+                let result = try await withProgress(0...0.8) { try await processAudio(mId, audioURL, diarizationConfig) }
                 _ = try persistProcessingState(meetingId: mId, status: "needs_review", result: result)
                 await completeRecordedMeeting(meetingID: mId, placeholderTitle: placeholderTitle)
                 appendCoverageNotice(result)
@@ -1138,6 +1142,7 @@ public final class AppState: ObservableObject {
             // Automatic completion never replaces notes the user already created.
             let baseline = try summarySnapshot(store.getSummary(meetingId: meetingID))
             guard baseline == nil else {
+                pendingSummaries[meetingID] = nil
                 statusMessage = "Recording processed. Your existing summary is preserved."
                 return
             }
@@ -1149,7 +1154,7 @@ public final class AppState: ObservableObject {
             statusMessage = apple ? "Preparing notes with Apple's on-device model…" : "Preparing notes from the transcript…"
             // A failed AI request must never be substituted with excerpts and
             // stored as if the requested summary had completed.
-            var generated = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
+            var generated = try await withProgress(0.8...1) { try await summarizeMeeting(meeting, utterances, attendees, template, apple) }
             var saved = false
             try store.withImmediateTransaction {
                 guard let latest = store.getMeeting(id: meetingID),
@@ -1159,6 +1164,7 @@ public final class AppState: ObservableObject {
                 try store.saveSummary(generated)
                 saved = true
             }
+            pendingSummaries[meetingID] = nil
             if saved {
                 meetings = store.listMeetings()
                 if currentMeeting?.id == meetingID { currentSummary = generated; currentMeeting = store.getMeeting(id: meetingID) }
@@ -1174,8 +1180,14 @@ public final class AppState: ObservableObject {
             } else {
                 statusMessage = "Recording processed. Changes made while preparing notes were preserved."
             }
+        } catch is CancellationError {
+            pendingSummaries[meetingID] = placeholderTitle ?? ""
+            statusMessage = "Recording and transcript saved. The summary will finish the next time Minutes is open."
         } catch {
-            statusMessage = "Recording and transcript saved. AI summary pending; retry Generate Summary: \(error.localizedDescription)"
+            // Kept so the summary resumes on its own the next time the app is
+            // active, instead of waiting for someone to notice and retry it.
+            pendingSummaries[meetingID] = placeholderTitle ?? ""
+            statusMessage = "Recording and transcript saved. The summary will be retried the next time Minutes is open: \(error.localizedDescription)"
         }
     }
     
@@ -1196,7 +1208,7 @@ public final class AppState: ObservableObject {
         selectMeeting(id: meeting.id)
         if !isTranscript, let path = meeting.audioPath {
             do {
-                let result = try await processAudio(meeting.id, URL(fileURLWithPath: path), diarizationConfig)
+                let result = try await withProgress(0...0.8) { try await processAudio(meeting.id, URL(fileURLWithPath: path), diarizationConfig) }
                 meeting = try persistProcessingState(meetingId: meeting.id, status: "needs_review", result: result)
                 await completeRecordedMeeting(meetingID: meeting.id, placeholderTitle: nil)
                 appendCoverageNotice(result)
@@ -1240,7 +1252,7 @@ public final class AppState: ObservableObject {
             _ = try persistProcessingState(meetingId: meeting.id, status: "processing", audioURL: recoveredCopy)
             recoveredPathSaved = recoveredCopy != nil
             statusMessage = "Processing saved audio on device..."
-            let result = try await processAudio(meeting.id, recoveredCopy ?? URL(fileURLWithPath: path), diarizationConfig)
+            let result = try await withProgress(0...0.8) { try await processAudio(meeting.id, recoveredCopy ?? URL(fileURLWithPath: path), diarizationConfig) }
             _ = try persistProcessingState(meetingId: meeting.id, status: "needs_review", result: result)
             await completeRecordedMeeting(meetingID: meeting.id, placeholderTitle: nil)
             appendCoverageNotice(result)
@@ -1331,7 +1343,8 @@ public final class AppState: ObservableObject {
         statusMessage = apple ? "Generating notes with Apple's on-device model…" : "Extracting notes from the transcript…"
         do {
             let baseline = try summarySnapshot(store.getSummary(meetingId: meeting.id))
-            var summary = try await summarizeMeeting(meeting, utterances, attendees, template, apple)
+            var summary = try await withProgress(0...1) { try await summarizeMeeting(meeting, utterances, attendees, template, apple) }
+            pendingSummaries[meeting.id] = nil
             try store.withImmediateTransaction {
                 guard try summarySnapshot(store.getSummary(meetingId: meeting.id)) == baseline else {
                     throw NSError(domain: "MinutesApp", code: 409, userInfo: [NSLocalizedDescriptionKey: "The summary changed while generation was running. Your edits were preserved; review them before generating again."])
@@ -1595,3 +1608,48 @@ extension AppState {
     }
 }
 #endif
+
+// MARK: - Processing progress and summaries that resume
+
+extension AppState {
+    /// Runs one stage of a processing job as `range` of its overall progress.
+    func withProgress<T>(_ range: ClosedRange<Double>, _ operation: @MainActor () async throws -> T) async rethrows -> T {
+        let handler: ProcessingProgress.Handler = { [weak self] fraction, phase in
+            Task { @MainActor in self?.receiveProgress(fraction, phase: phase) }
+        }
+        return try await ProcessingProgress.tracking(handler) { try await ProcessingProgress.within(range, operation) }
+    }
+
+    private func receiveProgress(_ fraction: Double, phase: String) {
+        guard isProcessing || isSummarizing else { return }
+        // Updates hop to the main actor independently; never move backwards.
+        processingProgress = max(processingProgress ?? 0, fraction)
+        processingPhase = phase
+    }
+
+    fileprivate func updateProgressLifetime() {
+        if !isProcessing && !isSummarizing { processingProgress = nil; processingPhase = "" }
+        else if processingProgress == nil { processingProgress = 0 }
+    }
+
+    /// Meetings whose automatic summary did not finish, with the placeholder
+    /// title to replace ("" for none). Survives relaunch.
+    var pendingSummaries: [String: String] {
+        get { preferences.dictionary(forKey: "pendingSummaryMeetings") as? [String: String] ?? [:] }
+        set { preferences.set(newValue, forKey: "pendingSummaryMeetings") }
+    }
+
+    /// Finishes summaries that failed or were interrupted, e.g. because the
+    /// app was in the background. Call when the app becomes active.
+    public func resumePendingSummaries() async {
+        guard !isRecording, !isStartingRecording, !isFinalizingRecording, !isProcessing, !isSummarizing else { return }
+        for (id, placeholder) in pendingSummaries.sorted(by: { $0.key < $1.key }) {
+            guard store.getMeeting(id: id) != nil, store.getSummary(meetingId: id) == nil else {
+                pendingSummaries[id] = nil; continue
+            }
+            await completeRecordedMeeting(meetingID: id, placeholderTitle: placeholder.isEmpty ? nil : placeholder)
+            guard pendingSummaries[id] == nil else { break }  // still failing; try again next time
+        }
+    }
+}
+

@@ -7,7 +7,16 @@ import MinutesSummarize
 @testable import MinutesApp
 
 @MainActor struct AutomaticCompletionTests {
-    private func fixture(empty: Bool = false, summaryFails: Bool = false, autoFolder: Bool = false) throws -> (AppState, MinutesStore, URL) {
+    /// Fails the first `failures` summaries, as a busy or backgrounded model does.
+    final class FlakySummaries: @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: Int
+        init(failures: Int) { remaining = failures }
+        func shouldFail() -> Bool { lock.withLock { remaining -= 1; return remaining >= 0 } }
+    }
+
+    private func fixture(empty: Bool = false, summaryFails: Bool = false, autoFolder: Bool = false,
+                         flaky: FlakySummaries? = nil) throws -> (AppState, MinutesStore, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("minutes-completion-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let audio = root.appendingPathComponent("fixture.wav")
@@ -25,7 +34,7 @@ import MinutesSummarize
             }, classifyMeetingFolder: { _, candidates in
                 FolderClassificationResult(folderID: candidates.first?.folder.id, status: .matched, reason: "Strong fixture match", similarity: 0.95, margin: 0.4)
             }, summarizeMeeting: { meeting, utterances, _, _, _ in
-                if summaryFails { throw CocoaError(.featureUnsupported) }
+                if summaryFails || flaky?.shouldFail() == true { throw CocoaError(.featureUnsupported) }
                 return MeetingSummary(meetingId: meeting.id, title: meeting.title, overview: utterances.map(\.text).joined(separator: " "), markdown: "Automatically prepared notes")
             })
         return (state, store, root)
@@ -63,9 +72,32 @@ import MinutesSummarize
         await state.stopAndProcessMeeting()
         #expect(store.getSummary(meetingId: id) == nil)
         #expect(!store.listUtterances(meetingId: id).isEmpty)
-        #expect(state.statusMessage.contains("AI summary pending"))
+        #expect(state.statusMessage.contains("summary will be retried"))
         #expect(store.getMeeting(id: id)?.status == "needs_review")
         #expect(!state.isSummarizing)
+    }
+    @Test func failedSummaryFinishesTheNextTimeTheAppIsActive() async throws {
+        let (state, store, root) = try fixture(flaky: FlakySummaries(failures: 1))
+        defer { try? FileManager.default.removeItem(at: root) }
+        state.startQuickMeeting(); let id = try #require(state.activeRecordingMeetingID)
+        await state.stopAndProcessMeeting()
+        #expect(store.getSummary(meetingId: id) == nil)
+        #expect(state.pendingSummaries[id] != nil)
+        #expect(state.processingProgress == nil)
+        await state.resumePendingSummaries()
+        #expect(store.getSummary(meetingId: id)?.markdown == "Automatically prepared notes")
+        #expect(state.pendingSummaries[id] == nil)
+        #expect(!(store.getMeeting(id: id)?.title.hasPrefix("Meeting (") ?? true))
+    }
+    @Test func pendingSummaryForADeletedOrSummarizedMeetingIsDropped() async throws {
+        let (state, store, root) = try fixture(summaryFails: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        state.startQuickMeeting(); let id = try #require(state.activeRecordingMeetingID)
+        await state.stopAndProcessMeeting()
+        try store.saveSummary(MeetingSummary(meetingId: id, title: "Manual", overview: "Manual", markdown: "Written by hand"))
+        await state.resumePendingSummaries()
+        #expect(state.pendingSummaries.isEmpty)
+        #expect(store.getSummary(meetingId: id)?.markdown == "Written by hand")
     }
     @Test func completedRecordingIsAutomaticallyFiledAfterNotes() async throws {
         let (state, store, root) = try fixture(autoFolder: true)

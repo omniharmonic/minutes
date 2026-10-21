@@ -1,4 +1,5 @@
 import Foundation
+import MinutesCore
 import AVFoundation
 import os
 
@@ -62,14 +63,16 @@ enum SpeechWindows {
         let windows = plan(segments: segments, duration: audio.duration)
         guard !windows.isEmpty else { return Transcription(words: [], detectedSeconds: 0, uncoveredSeconds: 0) }
         PipelineOrchestrator.logger.info("Recognizing \(windows.count, privacy: .public) speech windows")
-        let primary = try await transcribePlannedWindows(audio: audio, windows: windows, backend: backend, fallbackTranscriptURL: fallbackTranscriptURL)
+        let primary = try await ProcessingProgress.within(0...0.9) {
+            try await transcribePlannedWindows(audio: audio, windows: windows, backend: backend, fallbackTranscriptURL: fallbackTranscriptURL)
+        }
         let spans = detectedSpans(segments, duration: audio.duration)
         var result = primary
         var retryCount = 0
         // Budget per unresolved interval, never per recording. A long recording
         // must not spend every retry on its opening minute. Recompute gaps after
         // each pass so successful hypotheses are retained and not requested again.
-        for length in [6.0, 3.0] {
+        for (pass, length) in [6.0, 3.0].enumerated() {
             let gaps = unresolvedIntervals(spans: spans, words: result, minimumGap: 3)
             var retries: [SpeechRecognitionWindow] = []
             for gap in gaps {
@@ -83,8 +86,11 @@ enum SpeechWindows {
             }
             retryCount += retries.count
             if !retries.isEmpty { PipelineOrchestrator.logger.info("Retrying \(retries.count, privacy: .public) shorter \(Int(length), privacy: .public)s windows") }
-            let recovered = try await transcribePlannedWindows(audio: audio, windows: retries, backend: backend,
-                fallbackTranscriptURL: fallbackTranscriptURL, phase: "retry-\(Int(length))")
+            let share = 0.9 + 0.05 * Double(pass)
+            let recovered = try await ProcessingProgress.within(share...(share + 0.05)) {
+                try await transcribePlannedWindows(audio: audio, windows: retries, backend: backend,
+                    fallbackTranscriptURL: fallbackTranscriptURL, phase: "retry-\(Int(length))")
+            }
             for word in recovered {
                 let overlaps = result.contains { existing in
                     let overlap = min(existing.end, word.end) - max(existing.start, word.start)
@@ -150,6 +156,7 @@ enum SpeechWindows {
         var words: [ASRWord] = []
         for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
+            ProcessingProgress.report(Double(index) / Double(windows.count), phase: "Transcribing")
             let startFrame = max(0, Int((window.start * audio.sampleRate).rounded(.down)))
             let endFrame = min(audio.samples.count, Int((window.end * audio.sampleRate).rounded(.up)))
             guard startFrame < endFrame else { continue }

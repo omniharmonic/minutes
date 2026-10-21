@@ -149,3 +149,11 @@ The system capture service now restarts its stream with the current default micr
 **Continue Recording** (meeting ⋯ menu on Mac and iOS) records a new part and, on stop, joins it to the meeting's audio. The joined audio is verified against the parts' total length. Moments from the new part are shifted by the earlier length, the temporary part is removed, and the whole meeting is transcribed again; notes are kept.
 
 Microphone-only capture already restarts its audio engine on route changes and interruptions, and saves what it recorded if it gives up.
+
+## 2026-10-21: Long jobs keep running in the background, and summaries resume
+A 2h10m iPhone voice note took about 7.5 hours to transcribe because iOS suspended the app as soon as recording stopped. Its summary never appeared: Apple's model rate-limits apps in the background, Minutes treated "busy" as a failure of the whole summary, and nothing retried it.
+- On iOS 26 and later, processing runs as a `BGContinuedProcessingTask`. iOS shows it with live progress and may end it early. Earlier systems get the standard short background grace period.
+- Processing reports progress through a task-local `ProcessingProgress`: speaker detection about 3–20% (estimated by time, since the model call reports nothing), transcription windows 20–98%, and the summary as the last fifth.
+- When the model is busy, Minutes waits and retries (3, 6, 12, 24 and 30 seconds) before giving up.
+- A summary that still fails is remembered and runs again automatically the next time the app is active, on Mac and iPhone. A summary written by hand or a deleted meeting cancels it.
+- Summary chunk size follows `SystemLanguageModel.contextSize`, never below the 2,800 bytes that fit a 4,096-token context. Larger contexts on newer systems mean fewer requests per long meeting.
