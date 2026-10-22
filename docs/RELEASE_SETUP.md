@@ -43,7 +43,7 @@ References: [Apple Developer ID creation](https://developer.apple.com/help/accou
 Mac package command:
 
 ```sh
-DEVELOPER_ID_APPLICATION='Developer ID Application: BENJAMIN GLEASON ROSS (83Y42N33H8)' \
+DEVELOPER_ID_APPLICATION='Developer ID Application: <name on your certificate> (83Y42N33H8)' \
 NOTARYTOOL_PROFILE=minutes-notary MINUTES_BUNDLE_GOOGLE_REGISTRATION=1 ./scripts/build-app.sh
 ```
 

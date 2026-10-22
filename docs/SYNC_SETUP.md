@@ -27,7 +27,7 @@ Edits made on two devices merge field by field. When both changed the same field
 
 ```sh
 MINUTES_CLOUDKIT_PROFILE=$PWD/build/signing/Minutes_DeveloperID.provisionprofile \
-DEVELOPER_ID_APPLICATION="Developer ID Application: BENJAMIN GLEASON ROSS (83Y42N33H8)" \
+DEVELOPER_ID_APPLICATION="Developer ID Application: <name on your certificate> (83Y42N33H8)" \
 MINUTES_BUNDLE_GOOGLE_REGISTRATION=1 ./scripts/build-app.sh
 ```
 

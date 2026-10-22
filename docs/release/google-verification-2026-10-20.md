@@ -124,6 +124,6 @@ In Cloud Console → Google Auth Platform → Branding, the privacy policy URL i
 > 3. The scope justification in the Cloud Console explains why narrower scopes (free/busy, owned-calendars-only) cannot support these features.
 >
 > Kind regards,
-> Benjamin Gleason Ross
+> OmniHarmonic
 
 Don't send the reply until the real link is in the Console. Never enter a placeholder link.
