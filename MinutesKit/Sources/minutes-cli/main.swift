@@ -478,7 +478,9 @@ struct MinutesCLI {
                     try store.saveSummary(summary)
                     try store.saveMeeting(updatedMeeting)
                 }
-                if options.engine == .apple {
+                if options.engine == .apple, !Summarizer.isGeneratedDraft(summary) {
+                    print("The on-device model could not write notes for \(meetingId); labeled transcript highlights were saved instead.")
+                } else if options.engine == .apple {
                     print("Apple on-device draft saved for \(meetingId), template \(options.template.title). Review generated notes against their cited evidence.")
                 } else {
                     print("Extractive notes saved for \(meetingId). Review quoted candidates; templates apply to generated notes.")

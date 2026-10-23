@@ -78,17 +78,19 @@ struct SummaryCitationTests {
         let meeting = Meeting(id: "citations", title: "Citations")
         let speech = Utterance(id: 1, meetingId: meeting.id, clusterId: "c", speakerName: "Unassigned", start: 0, end: 1, text: "A possibility, not a commitment.")
         for response in ["- Everyone agreed [T9999].", "- Everyone agreed.", "- A possibility [T0001].\n- Ben owns all follow-ups."] {
-            await #expect(throws: SummaryError.self) {
-                try await Summarizer(provider: FixedSummaryProvider(response: response)).summarize(meeting: meeting, utterances: [speech], attendees: [])
-            }
+            // Unverified notes are never saved as a draft; quotations are labeled instead.
+            let summary = try await Summarizer(provider: FixedSummaryProvider(response: response)).summarize(meeting: meeting, utterances: [speech], attendees: [])
+            #expect(!Summarizer.isGeneratedDraft(summary))
+            #expect(!summary.markdown.contains("Everyone agreed") && !summary.markdown.contains("Ben owns"))
+            #expect(summary.markdown.contains("could not write notes for this meeting"))
         }
     }
-    @Test func providerFailureDoesNotReturnAnExtractiveSuccess() async throws {
+    @Test func providerFailureIsLabeledNotPresentedAsADraft() async throws {
         let meeting = Meeting(id: "empty", title: "Empty output")
         let speech = Utterance(id: 1, meetingId: meeting.id, clusterId: "c", speakerName: "Unknown", start: 1, end: 2, text: "Source remains available.")
-        await #expect(throws: SummaryError.self) {
-            try await Summarizer(provider: FixedSummaryProvider(response: "")).summarize(meeting: meeting, utterances: [speech], attendees: [])
-        }
+        let summary = try await Summarizer(provider: FixedSummaryProvider(response: "")).summarize(meeting: meeting, utterances: [speech], attendees: [])
+        #expect(!Summarizer.isGeneratedDraft(summary))
+        #expect(summary.markdown.contains("could not write notes for this meeting"))
     }
 }
 

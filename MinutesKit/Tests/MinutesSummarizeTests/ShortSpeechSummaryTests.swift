@@ -66,11 +66,11 @@ struct BoundedCitationRetryTests {
         #expect(requests.allSatisfy { $0.0.utf8.count + $0.1.utf8.count <= provider.maximumInputBytes })
         #expect(summary.overview == "- Telescope inspection is planned for Tuesday. [T0001]")
     }
-    @Test func secondUnsupportedResultStillFailsAndDoesNotRetryForever() async throws {
+    @Test func secondUnsupportedResultIsNotSavedAndDoesNotRetryForever() async throws {
         let provider = CitationRetryFixture(["- Invented [T9999]", "- Still unsupported [T9999]"])
-        await #expect(throws: SummaryError.self) {
-            try await Summarizer(provider: provider).summarize(meeting: Meeting(id: "retry", title: "Fictional introduction"), utterances: [speech], attendees: [])
-        }
+        let summary = try await Summarizer(provider: provider).summarize(meeting: Meeting(id: "retry", title: "Fictional introduction"), utterances: [speech], attendees: [])
+        #expect(!Summarizer.isGeneratedDraft(summary))
+        #expect(!summary.markdown.contains("Invented") && !summary.markdown.contains("Still unsupported"))
         #expect(await provider.recorded().count == 2)
     }
 }

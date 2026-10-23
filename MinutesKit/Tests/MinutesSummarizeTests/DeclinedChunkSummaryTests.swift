@@ -24,6 +24,13 @@ private actor DecliningProvider: LLMProvider {
     }
 }
 
+private struct BusyProvider: LLMProvider {
+    let id = "busy-fixture"
+    let isLocal = true
+    var error = LocalSummaryProviderError.busy
+    func generate(system: String, prompt: String) async throws -> String { throw error }
+}
+
 private func discussion(count: Int = 20, marked: Set<Int>) -> [Utterance] {
     (0..<count).map { index in
         let text = (marked.contains(index) ? "DECLINE_ME " : "") + "We reviewed planning item \(index + 1)."
@@ -42,12 +49,36 @@ struct DeclinedChunkSummaryTests {
         #expect(summary.markdown.contains("could not be summarized by the model"))
     }
 
-    @Test("When most chunks are declined, the summary fails rather than claiming coverage")
-    func majorityDeclineFails() async {
+    @Test("When most chunks are declined, the remaining notes are saved with the gap disclosed")
+    func majorityDeclineIsDisclosed() async throws {
+        let summary = try await Summarizer(provider: DecliningProvider(marker: "DECLINE_ME")).summarize(
+            meeting: Meeting(id: "m", title: "Planning"), utterances: discussion(marked: Set(0..<15)), attendees: [])
+        #expect(Summarizer.isGeneratedDraft(summary))
+        #expect(summary.markdown.contains("could not be summarized by the model"))
+    }
+
+    @Test("When every chunk is declined, labeled transcript highlights are saved instead of failing")
+    func totalDeclineSavesLabeledHighlights() async throws {
+        let summary = try await Summarizer(provider: DecliningProvider(marker: "DECLINE_ME")).summarize(
+            meeting: Meeting(id: "m", title: "Planning"), utterances: discussion(marked: Set(0..<20)), attendees: [])
+        #expect(!Summarizer.isGeneratedDraft(summary))
+        #expect(summary.markdown.contains("## Transcript highlights"))
+        #expect(summary.markdown.contains("could not write notes for this meeting"))
+    }
+
+    @Test("A busy model still fails the attempt so the summary is retried later")
+    func busyModelIsNotReplacedWithHighlights() async {
         await #expect(throws: LocalSummaryProviderError.self) {
-            try await Summarizer(provider: DecliningProvider(marker: "DECLINE_ME")).summarize(
-                meeting: Meeting(id: "m", title: "Planning"), utterances: discussion(marked: Set(0..<15)), attendees: [])
+            try await Summarizer(provider: BusyProvider()).summarize(
+                meeting: Meeting(id: "m", title: "Planning"), utterances: discussion(marked: []), attendees: [])
         }
+    }
+
+    @Test("An unavailable model saves labeled highlights")
+    func unavailableModelSavesHighlights() async throws {
+        let summary = try await Summarizer(provider: BusyProvider(error: .unavailable(.appleIntelligenceDisabled))).summarize(
+            meeting: Meeting(id: "m", title: "Planning"), utterances: discussion(marked: []), attendees: [])
+        #expect(summary.markdown.contains("could not write notes for this meeting"))
     }
 
     @Test("A declined reduction carries its validated notes forward and the summary still completes")

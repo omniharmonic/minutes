@@ -159,6 +159,15 @@ A 2h10m iPhone voice note took about 7.5 hours to transcribe because iOS suspend
 - Summary chunk size follows `SystemLanguageModel.contextSize`, never below the 2,800 bytes that fit a 4,096-token context. Larger contexts on newer systems mean fewer requests per long meeting.
 
 
+## 2026-10-22: Summaries use permissive plain text first and never fail outright
+A 12-minute iPhone recording got no summary. On iOS 27, Apple's model reports failures as `LanguageModelError`, which Minutes did not recognize, so a guardrail decline (input classifier, before any generation) failed the whole summary. macOS 26 reports the same decline as `GenerationError` and only skipped that chunk, which is why the Mac summarized the identical transcript.
+- Guided generation always applies Apple's default guardrails. `permissiveContentTransformations`, Apple's mode for transforming user-supplied text, applies only to `String` output. Every summary, reduction and outcome request is now made as plain text under that mode first; guided generation is the fallback when the text is refused, uncited or fails.
+- In plain text the model copied JSON evidence verbatim, test chatter included. Plain-text requests show evidence as `[T0001] Speaker: text` lines with one worked example; that removed the copying in the live fixture.
+- Citation validation is unchanged: a bullet without a supplied evidence ID is rejected, so a refusal message or invented claim cannot be saved as notes.
+- `LanguageModelError` maps to the existing errors: guardrail and refusal are chunk-level declines; rate limits and timeouts retry with backoff.
+- Declined chunks are skipped and disclosed even when they are the majority. If the model produces nothing usable, or is unavailable, the summary is saved as clearly labeled transcript highlights instead of failing. Only busy and cancelled requests still defer to the automatic retry.
+- Apple's guardrails cannot be disabled. A model without a classifier (MLX, user-configured endpoint; PRD MN-FR-10) is the remaining path if declines persist.
+
 ## 2026-10-21: iOS Live Activity in a dependency-free module; captions reuse Apple Speech
 
 Ship the recording Live Activity as a WidgetKit extension that links only a new `MinutesActivity` module, so the extension stays small and cannot pull in speech or diarization stacks. App Intents live as source shared by both targets (not in the package) so App Intents metadata extraction sees them in the app; `perform` runs in the app process and forwards to handlers bound to the existing AppState actions. Updates are throttled to about one per second and only on visible change; the timer is date-anchored so it ticks without updates. iOS captions reuse the Mac on-device Apple Speech preview rather than a new model, stay opt-in and disposable, and fail closed when local recognition is unavailable. Not yet validated on a physical device: Live Activity rendering and buttons, recognition while the phone is locked, and battery cost.

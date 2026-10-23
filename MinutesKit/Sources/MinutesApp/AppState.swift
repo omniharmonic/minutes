@@ -1152,8 +1152,8 @@ public final class AppState: ObservableObject {
             isSummarizing = true
             defer { isSummarizing = false }
             statusMessage = apple ? "Preparing notes with Apple's on-device model…" : "Preparing notes from the transcript…"
-            // A failed AI request must never be substituted with excerpts and
-            // stored as if the requested summary had completed.
+            // When the model cannot write notes, the saved summary is labeled
+            // transcript highlights, never presented as a completed AI draft.
             var generated = try await withProgress(0.8...1) { try await summarizeMeeting(meeting, utterances, attendees, template, apple) }
             var saved = false
             try store.withImmediateTransaction {
@@ -1168,14 +1168,17 @@ public final class AppState: ObservableObject {
             if saved {
                 meetings = store.listMeetings()
                 if currentMeeting?.id == meetingID { currentSummary = generated; currentMeeting = store.getMeeting(id: meetingID) }
+                let drafted = apple && Summarizer.isGeneratedDraft(generated)
                 if Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes) {
                     statusMessage = generated.overview
+                } else if drafted {
+                    statusMessage = "Recording and on-device AI draft saved. Review speakers and notes before sharing."
                 } else {
                     statusMessage = apple
-                        ? "Recording and on-device AI draft saved. Review speakers and notes before sharing."
+                        ? "Recording and transcript highlights saved. The on-device model could not write notes; regenerate the summary to try again."
                         : "Recording and transcript highlights saved. Enable Apple Intelligence summaries for an AI draft."
                 }
-                if apple { await automaticallyExportToPrism(meetingID: meetingID); await automaticallyExportToParachute(meetingID: meetingID) }
+                if drafted { await automaticallyExportToPrism(meetingID: meetingID); await automaticallyExportToParachute(meetingID: meetingID) }
                 syncLibraryNow()
             } else {
                 statusMessage = "Recording processed. Changes made while preparing notes were preserved."
@@ -1357,7 +1360,9 @@ public final class AppState: ObservableObject {
             await automaticallyFileMeeting(id: meeting.id)
             statusMessage = Summarizer.hasOnlyIntroductions(utterances: utterances, userNotes: meeting.userNotes)
                 ? summary.overview
-                : (apple ? "On-device AI draft saved. Review it before sharing." : "Transcript highlights saved. No AI summary was generated.")
+                : (apple && Summarizer.isGeneratedDraft(summary) ? "On-device AI draft saved. Review it before sharing."
+                   : apple ? "Transcript highlights saved. The on-device model could not write notes for this meeting."
+                   : "Transcript highlights saved. No AI summary was generated.")
             if apple { await automaticallyExportToPrism(meetingID: meeting.id); await automaticallyExportToParachute(meetingID: meeting.id) }
             syncLibraryNow()
         } catch { statusMessage = "Summary failed: \(error.localizedDescription) Your existing notes and transcript are preserved." }

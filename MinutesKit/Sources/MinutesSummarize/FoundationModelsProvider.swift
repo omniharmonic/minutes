@@ -68,7 +68,51 @@ public struct FoundationModelsProvider: LLMProvider {
     }
 
     public func generate(system: String, prompt: String) async throws -> String {
-        try await Self.retryingBusy(delays: busyRetryDelays) { try await generateOnce(system: system, prompt: prompt) }
+        try await Self.retryingBusy(delays: busyRetryDelays) {
+            try await Self.preferringText(
+                text: { try await generatePermissiveText(system: system, prompt: prompt) },
+                guided: { try await generateOnce(system: system, prompt: prompt) })
+        }
+    }
+
+    /// Plain text under permissive guardrails first; guided generation, under
+    /// the default guardrails, only when the text attempt is refused, uncited
+    /// or fails. Busy and cancellation propagate so the request is retried.
+    static func preferringText<T>(text: () async throws -> T, guided: () async throws -> T) async throws -> T {
+        do { return try await text() }
+        catch is CancellationError { throw CancellationError() }
+        catch LocalSummaryProviderError.busy { throw LocalSummaryProviderError.busy }
+        catch {
+            Logger(subsystem: "app.minutes", category: "LocalSummary").info("Text attempt unusable (\(String(describing: error), privacy: .public)); using guided generation")
+            return try await guided()
+        }
+    }
+
+    /// The Markdown bullets of a text response, normalized to "- " with each
+    /// cited ID in its own brackets.
+    static func textBullets(_ response: String) -> [String] {
+        response.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("- ") || $0.hasPrefix("* ") }
+            .map { normalizedCitations("- " + $0.dropFirst(2)) }
+    }
+
+    /// Plain text cites loosely: "[T0003, T0004]", "(T0003)", "T0003". Groups of
+    /// IDs become trailing "[T0003] [T0004]"; validation still checks each one.
+    static func normalizedCitations(_ bullet: String) -> String {
+        let id = #"[TN][0-9]{4,}"#
+        let group = #"\s*[\[(]\s*(?:Source IDs?:?\s*)?"# + id + #"(?:\s*[,;&]?\s*(?:and\s+)?"# + id + #")*\s*[\])]|\s*\b"# + id + #"\b"#
+        guard let expression = try? NSRegularExpression(pattern: id),
+              let groups = try? NSRegularExpression(pattern: group, options: .caseInsensitive) else { return bullet }
+        let range = NSRange(bullet.startIndex..., in: bullet)
+        let ids = expression.matches(in: bullet, range: range).compactMap { Range($0.range, in: bullet).map { String(bullet[$0]) } }
+        guard !ids.isEmpty else { return bullet }
+        var text = groups.stringByReplacingMatches(in: bullet, range: range, withTemplate: "")
+        // A bare "Sources: T0003 and T0005" leaves its label behind.
+        text = text.replacingOccurrences(of: #"(?:\s*(?:\(?source IDs?:?|sources?:|and|,|;|\(|\)))+\s*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .trimmingCharacters(in: .whitespaces)
+        var seen: Set<String> = []
+        return text + " " + ids.filter { seen.insert($0).inserted }.map { "[\($0)]" }.joined(separator: " ")
     }
 
     /// Retries `operation` after each delay while the model reports it is busy.
@@ -131,14 +175,7 @@ public struct FoundationModelsProvider: LLMProvider {
                     let references = claim.evidenceIDs.map { "[" + $0.trimmingCharacters(in: CharacterSet(charactersIn: "[] ")) + "]" }.joined(separator: " ")
                     return "- " + text + " " + references
                 }
-                // The local model repeatedly invented unanswered questions from
-                // answered negations, even under a constrained question schema.
-                // Retain explicit unknowns as source excerpts; never manufacture
-                // uncertainty or reject the entire otherwise usable draft.
-                let questions = SummaryQuestionEvidence.unansweredExcerpts(prompt: prompt).filter { excerpt in
-                    !points.contains { $0.localizedCaseInsensitiveContains(excerpt.text) }
-                }.map { excerpt in "- " + excerpt.text + " " + excerpt.evidenceIDs.map { "[" + $0 + "]" }.joined(separator: " ") }
-                return (points + questions).joined(separator: "\n")
+                return Self.withUnansweredQuestions(points, prompt: prompt)
             } catch is CancellationError { throw CancellationError() }
             catch let error as LanguageModelSession.GenerationError {
                 try Task.checkCancellation()
@@ -156,6 +193,12 @@ public struct FoundationModelsProvider: LLMProvider {
             } catch let error as LocalSummaryProviderError { throw error }
             catch {
                 try Task.checkCancellation()
+                // iOS/macOS 27 report model failures as LanguageModelError, not
+                // GenerationError; unmapped, one declined chunk failed the summary.
+                if #available(macOS 27, iOS 27, *), let error = error as? LanguageModelError {
+                    Logger(subsystem: "app.minutes", category: "LocalSummary").error("Language model error \(String(describing: error).prefix(while: { $0 != "(" }), privacy: .public) promptBytes=\(prompt.utf8.count, privacy: .public)")
+                    throw Self.providerError(error)
+                }
                 let failure = error as NSError
                 Logger(subsystem: "app.minutes", category: "LocalSummary").error("Generation failure domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
                 throw LocalSummaryProviderError.generationFailed
@@ -163,6 +206,128 @@ public struct FoundationModelsProvider: LLMProvider {
         }
         #endif
         throw LocalSummaryProviderError.unavailable(.requiresNewerOS)
+    }
+
+    #if canImport(FoundationModels)
+    @available(macOS 27, iOS 27, *)
+    static func providerError(_ error: LanguageModelError) -> LocalSummaryProviderError {
+        switch error {
+        case .contextSizeExceeded: .contextLimit
+        case .rateLimited, .timeout: .busy
+        case .guardrailViolation, .refusal: .contentDeclined
+        case .unsupportedLanguageOrLocale: .unsupportedLanguage
+        case .unsupportedGenerationGuide, .unsupportedCapability, .unsupportedTranscriptContent: .unsupportedResponse
+        @unknown default: .generationFailed
+        }
+    }
+    #endif
+
+    /// Guided generation always applies the default guardrails, which decline
+    /// ordinary meeting talk. Summarizing the user's own transcript is the
+    /// content transformation Apple's permissive mode exists for, but only for
+    /// String output, so requests are made as cited text bullets first. The
+    /// caller still rejects any bullet that lacks supplied evidence IDs.
+    private func generatePermissiveText(system: String, prompt: String) async throws -> String {
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            let outcomes = system.hasPrefix("Extract explicit outcomes.")
+            let session = LanguageModelSession(model: SystemLanguageModel(guardrails: .permissiveContentTransformations),
+                                               instructions: Self.textInstructions(system: system, outcomes: outcomes))
+            let content: String
+            do {
+                content = try await session.respond(to: Self.plainEvidence(prompt) + "\nNotes:",
+                    options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 768)).content
+            } catch is CancellationError { throw CancellationError() }
+            catch let error as LanguageModelSession.GenerationError {
+                try Task.checkCancellation()
+                Logger(subsystem: "app.minutes", category: "LocalSummary").error("Text generation error \(String(describing: error).prefix(while: { $0 != "(" }), privacy: .public) promptBytes=\(prompt.utf8.count, privacy: .public)")
+                switch error {
+                case .rateLimited, .concurrentRequests: throw LocalSummaryProviderError.busy
+                default: throw LocalSummaryProviderError.contentDeclined
+                }
+            } catch {
+                try Task.checkCancellation()
+                if #available(macOS 27, iOS 27, *), let error = error as? LanguageModelError {
+                    Logger(subsystem: "app.minutes", category: "LocalSummary").error("Text language model error \(String(describing: error).prefix(while: { $0 != "(" }), privacy: .public) promptBytes=\(prompt.utf8.count, privacy: .public)")
+                    if case .busy = Self.providerError(error) { throw LocalSummaryProviderError.busy }
+                }
+                throw LocalSummaryProviderError.contentDeclined
+            }
+            return try Self.citedText(content, outcomes: outcomes, prompt: prompt)
+        }
+        #endif
+        throw LocalSummaryProviderError.contentDeclined
+    }
+
+    /// Guided schemas carried the note-taking discipline; plain text needs it
+    /// stated, with an example. Without one the model copied quoted lines.
+    static func textInstructions(system: String, outcomes: Bool) -> String {
+        let task = outcomes
+            ? "Reply only with lines \"- Decision: \" or \"- Action: \", one sentence each, ending with its source IDs in brackets. If there are none, reply \"None\"."
+            : system.hasPrefix("Write a coherent whole-meeting brief")
+            ? "Each line is a draft note. Write at most three short bullets that combine them in your own words, with fewer words than the notes. End each bullet with every source ID it relies on."
+            : system.contains("Summary length: brief.")
+            ? "Write exactly one bullet that states the main point and its reason in your own words, ending with its source IDs in brackets."
+            : "Write up to six bullets of notes: decisions, plans, owners, reasons, next steps and open issues. Rephrase concisely in your own words and merge related lines; never copy a sentence. Skip microphone checks, greetings and introductions. End each bullet with the source IDs it relies on."
+        return """
+        You write meeting notes from a transcript. Each line starts with its source IDs in brackets. \(task)
+
+        Example:
+        Transcript:
+        [T0001] Testing, can you hear me?
+        [T0002] Let's move the launch to May because the venue is booked. Sam will email the vendor.
+        Notes:
+        - Launch moves to May because the venue is booked; Sam will email the vendor. [T0002]
+
+        Rules: \(system)
+        """
+    }
+
+    /// The JSON evidence lines of a prompt as "[IDs] Speaker: text" lines.
+    static func plainEvidence(_ prompt: String) -> String {
+        var title = "", lines: [String] = []
+        for line in prompt.components(separatedBy: .newlines) {
+            guard let data = line.data(using: .utf8),
+                  let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+                  let text = record["text"] else { continue }
+            switch record["kind"] {
+            case "meeting_title": title = text
+            case "transcript", "user_notes", "draft_summary":
+                guard let id = record["id"] else { continue }
+                let ids = ([id] + (record["additionalIDs"] ?? "").split(separator: " ").map(String.init)).map { "[\($0)]" }.joined(separator: " ")
+                let speaker = record["kind"] == "user_notes" ? "Personal note" : record["speaker"].flatMap { $0.isEmpty || ["Unknown", "Unassigned"].contains($0) ? nil : $0 }
+                lines.append(ids + " " + (speaker.map { $0 + ": " } ?? "") + text)
+            default: continue
+            }
+        }
+        return (title.isEmpty ? "" : "Meeting: \(title)\n") + "Transcript:\n" + lines.joined(separator: "\n")
+    }
+
+    /// The usable bullets of a text response. No cited bullet means a refusal
+    /// or unusable answer, except that outcome extraction may find none.
+    static func citedText(_ content: String, outcomes: Bool, prompt: String) throws -> String {
+        let bullets = textBullets(content)
+        if outcomes { return bullets.joined(separator: "\n") }
+        guard bullets.contains(where: { $0.range(of: #"\[[TN][0-9]{4,}\]"#, options: .regularExpression) != nil }) else {
+            // Shape only; the response may quote the transcript.
+            let lines = content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            Logger(subsystem: "app.minutes", category: "LocalSummary").info("Uncited text: bytes=\(content.utf8.count, privacy: .public) lines=\(lines.count, privacy: .public) bullets=\(bullets.count, privacy: .public) ids=\(content.range(of: #"[TN][0-9]{4}"#, options: .regularExpression) != nil, privacy: .public)")
+            throw LocalSummaryProviderError.contentDeclined
+        }
+        // Reductions restate notes; only transcript prompts carry open questions.
+        guard !prompt.contains(#""kind":"draft_summary""#) else { return bullets.joined(separator: "\n") }
+        return withUnansweredQuestions(bullets, prompt: prompt)
+    }
+
+    /// The local model repeatedly invented unanswered questions from answered
+    /// negations, even under a constrained question schema. Retain explicit
+    /// unknowns as source excerpts; never manufacture uncertainty or reject
+    /// the entire otherwise usable draft.
+    static func withUnansweredQuestions(_ points: [String], prompt: String) -> String {
+        let questions = SummaryQuestionEvidence.unansweredExcerpts(prompt: prompt).filter { excerpt in
+            !points.contains { $0.localizedCaseInsensitiveContains(excerpt.text) }
+        }.map { excerpt in "- " + excerpt.text + " " + excerpt.evidenceIDs.map { "[" + $0 + "]" }.joined(separator: " ") }
+        return (points + questions).joined(separator: "\n")
     }
 }
 
