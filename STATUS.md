@@ -359,5 +359,5 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 - [x] 474 model-free tests pass; iOS simulator and device builds pass.
 - [x] Owner: signed in on Mac and iPhone; meetings from both devices produced exactly one vault note each with no schema warnings; iCloud sync and Parachute sync together made no duplicates.
 
-2026-11-04: Mac 72 and iOS 64 built for release with the above.
+2026-11-04: Mac 72 published (v1.0.0-72, appcast serves 72). iOS 64 uploaded, delivery a26dc462-d9c0-4ca0-8c95-25b2d16e6ffa; owner adds it to Minutes Public Beta.
 
