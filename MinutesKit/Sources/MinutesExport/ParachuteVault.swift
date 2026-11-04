@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MinutesCore
 
@@ -9,8 +10,8 @@ public enum ParachuteVaultError: Error, LocalizedError, Sendable, Equatable {
         case .unsupportedServer: "This server doesn’t offer Parachute sign-in. Check the address and that the hub is up to date."
         case .notConnected: "Sign in to your Parachute vault first."
         case .signInExpired: "Your Parachute sign-in expired. Sign in again."
-        case .noVaultGranted: "Sign-in finished without access to a vault. Sign in again and choose a vault."
-        case .editedInVault: "This meeting’s note was edited in your vault since the last export, so Minutes left it unchanged."
+        case .noVaultGranted: "Sign-in finished without access to a single vault. Sign in again and choose one vault (not “All vaults”)."
+        case .editedInVault: "This meeting’s note was changed in your vault (by you or an agent) since Minutes saved it, so Minutes leaves it unchanged."
         case .http(let status, let message): "Parachute request failed (HTTP \(status))\(message.map { ": \($0)" } ?? "")."
         }
     }
@@ -87,12 +88,16 @@ public actor ParachuteVaultConnection {
         let receiver = try OAuthLoopbackReceiver(preferredPort: Self.preferredLoopbackPort)
         defer { receiver.cancel() }
         let clientID = try await clientID(metadata: metadata, redirect: receiver.redirectURI)
-        // An unnamed vault scope makes the hub ask which vault Minutes may write to.
-        let attempt = try OAuthPKCEAttempt(clientID: clientID, redirectURI: receiver.redirectURI, scopes: ["vault:write"])
+        // Ask for one named vault (the hub's `default` when it has one). An unnamed
+        // scope makes the hub offer "All vaults", which grants an account
+        // connection rather than access to a vault, so Minutes avoids it.
+        let target = Self.preferredVault(among: [], listed: await listedVaults())
+        let scope = target.map { "vault:\($0):write" } ?? "vault:write"
+        let attempt = try OAuthPKCEAttempt(clientID: clientID, redirectURI: receiver.redirectURI, scopes: [scope])
         var request = URLComponents(url: metadata.authorization_endpoint, resolvingAgainstBaseURL: false)!
         request.queryItems = [
             .init(name: "response_type", value: "code"), .init(name: "client_id", value: clientID),
-            .init(name: "redirect_uri", value: receiver.redirectURI.absoluteString), .init(name: "scope", value: "vault:write"),
+            .init(name: "redirect_uri", value: receiver.redirectURI.absoluteString), .init(name: "scope", value: scope),
             .init(name: "state", value: attempt.state), .init(name: "code_challenge", value: attempt.challenge),
             .init(name: "code_challenge_method", value: "S256"),
         ]
@@ -137,30 +142,112 @@ public actor ParachuteVaultConnection {
 
     // MARK: Notes
 
-    /// Creates the note, or updates the one saved before. An update never
-    /// overwrites edits made in the vault since `previous` was saved.
-    public func saveNote(path: String, content: String, tags: [String], metadata: [String: String],
-                         previous: ParachuteNoteReceipt?) async throws -> ParachuteNoteReceipt {
+    /// A note as the vault holds it now.
+    public struct RemoteNote: Sendable, Equatable {
+        public let id: String
+        public let path: String?
+        public let updatedAt: String?
+        public let content: String
+        public let tags: [String]
+        public let contentHash: String?
+        public let meetingID: String?
+        /// Where Minutes created the note.
+        public var minutesPath: String? = nil
+        func metadataMatches(_ id: String) -> Bool { meetingID == id }
+        public var receipt: ParachuteNoteReceipt { ParachuteNoteReceipt(id: id, updatedAt: updatedAt) }
+    }
+
+    /// Creates the note, or updates the one saved before. Minutes keeps a
+    /// note current only while nobody else has written to it: once a person or
+    /// an agent changes it in the vault, Minutes leaves it alone.
+    /// `meetingID` lets a device that has no receipt yet find the note another
+    /// device already created, so a meeting never becomes two notes.
+    /// Updates never move a note: it stays where it was created, so an agent
+    /// that files it elsewhere is never undone.
+    public func saveNote(path: String, content: String, tags: [String], metadata: [String: ParachuteMetadataValue],
+                         previous: ParachuteNoteReceipt?, meetingID: String? = nil) async throws -> ParachuteNoteReceipt {
         let credential = try await freshCredential()
         let notes = credential.vaultURL.appendingPathComponent("api/notes")
-        if let previous {
-            var body: [String: Any] = ["content": content, "metadata": metadata, "path": path]
-            if let stamp = previous.updatedAt { body["if_updated_at"] = stamp } else { body["force"] = true }
-            let target = notes.appendingPathComponent(previous.id)
-            do { return try Self.receipt(try await send(target, method: "PATCH", body: body, credential: credential)) }
-            catch ParachuteVaultError.http(404, _) { /* deleted in the vault: create it again below */ }
-            catch ParachuteVaultError.http(409, _) { throw ParachuteVaultError.editedInVault }
+        let hash = metadata["minutes_content_hash"]?.text
+        var fields = metadata.mapValues(\.json)
+        fields["minutes_path"] = nil
+        var target = previous
+        if target == nil, let meetingID, let existing = try await findNotes(meetingID: meetingID, credential: credential).first {
+            guard Self.isUntouched(existing, tags: tags) else { throw ParachuteVaultError.editedInVault }
+            if existing.contentHash == hash { return existing.receipt }
+            target = existing.receipt
+        }
+        if let target {
+            var stamp = target.updatedAt
+            for attempt in 0..<2 {
+                var body: [String: Any] = ["content": content, "metadata": fields]
+                if let stamp { body["if_updated_at"] = stamp } else { body["force"] = true }
+                do { return try Self.receipt(try await send(notes.appendingPathComponent(target.id), method: "PATCH", body: body, credential: credential)) }
+                catch ParachuteVaultError.http(404, _) { break /* deleted in the vault: create it again below */ }
+                catch ParachuteVaultError.http(409, let type) where type != "path_conflict" {
+                    // Someone wrote since our receipt. Another Minutes device leaves
+                    // the note exactly as Minutes renders it; anyone else does not.
+                    guard attempt == 0, let current = try await fetchNote(id: target.id, credential: credential),
+                          Self.isUntouched(current, tags: tags) else { throw ParachuteVaultError.editedInVault }
+                    if current.contentHash == hash { return current.receipt }
+                    stamp = current.updatedAt
+                }
+            }
         }
         var candidate = path
         for attempt in 0..<2 {
-            let body: [String: Any] = ["path": candidate, "content": content, "tags": tags, "metadata": metadata]
+            fields["minutes_path"] = candidate
+            let body: [String: Any] = ["path": candidate, "content": content, "tags": tags, "metadata": fields]
             do { return try Self.receipt(try await send(notes, method: "POST", body: body, credential: credential)) }
             catch ParachuteVaultError.http(409, _) where attempt == 0 {
                 // Another note already uses this path; keep both.
-                candidate = path + " (" + (metadata["minutes_meeting_id"].map { String($0.prefix(6)) } ?? "2") + ")"
+                candidate = path + "-" + (meetingID.map { String($0.prefix(6)).lowercased() } ?? "2")
             }
         }
         throw ParachuteVaultError.http(409, "A note already exists at \(path)")
+    }
+
+    /// True when the note's text is exactly what Minutes last wrote, nobody
+    /// added tags and it is still where Minutes put it: no person or agent has
+    /// worked in it.
+    static func isUntouched(_ note: RemoteNote, tags: [String]) -> Bool {
+        guard let hash = note.contentHash, hash == ParachuteMeetingNote.contentHash(note.content) else { return false }
+        if let placed = note.minutesPath, let path = note.path,
+           placed.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased() != path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased() {
+            return false
+        }
+        return Set(note.tags).isSubset(of: Set(tags))
+    }
+
+    /// Notes Minutes saved for this meeting, oldest first. The plain
+    /// `meta[field]=value` filter works without an index on the hub.
+    func findNotes(meetingID: String, credential: Credential) async throws -> [RemoteNote] {
+        var components = URLComponents(url: credential.vaultURL.appendingPathComponent("api/notes"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [.init(name: "meta[minutes_meeting_id]", value: meetingID), .init(name: "include_content", value: "true"),
+                                 .init(name: "sort", value: "asc"), .init(name: "limit", value: "10")]
+        let data: Data
+        do { data = try await send(components.url!, method: "GET", body: nil, credential: credential) }
+        catch ParachuteVaultError.http(404, _) { return [] }
+        let object = try JSONSerialization.jsonObject(with: data)
+        let rows = (object as? [[String: Any]]) ?? ((object as? [String: Any])?["notes"] as? [[String: Any]]) ?? []
+        return rows.compactMap(Self.remoteNote).filter { $0.metadataMatches(meetingID) }
+    }
+
+    func fetchNote(id: String, credential: Credential) async throws -> RemoteNote? {
+        do {
+            let data = try await send(credential.vaultURL.appendingPathComponent("api/notes").appendingPathComponent(id), method: "GET", body: nil, credential: credential)
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            return Self.remoteNote((object["note"] as? [String: Any]) ?? object)
+        } catch ParachuteVaultError.http(404, _) { return nil }
+    }
+
+    static func remoteNote(_ note: [String: Any]) -> RemoteNote? {
+        guard let id = note["id"] as? String, !id.isEmpty else { return nil }
+        let metadata = note["metadata"] as? [String: Any] ?? [:]
+        return RemoteNote(id: id, path: note["path"] as? String, updatedAt: (note["updatedAt"] ?? note["updated_at"]) as? String,
+                          content: note["content"] as? String ?? "", tags: note["tags"] as? [String] ?? [],
+                          contentHash: metadata["minutes_content_hash"] as? String, meetingID: metadata["minutes_meeting_id"] as? String,
+                          minutesPath: metadata["minutes_path"] as? String)
     }
 
     static func receipt(_ data: Data) throws -> ParachuteNoteReceipt {
@@ -182,6 +269,23 @@ public actor ParachuteVaultConnection {
             guard endpoint.host?.lowercased() == origin.host?.lowercased(), endpoint.scheme == origin.scheme else { throw ParachuteVaultError.unsupportedServer }
         }
         return metadata
+    }
+
+    /// When access covers several vaults, Minutes uses `default`, or the only one.
+    static func preferredVault(among named: Set<String>, listed: [String]) -> String? {
+        let candidates = named.isEmpty ? Set(listed) : named
+        if candidates.contains("default") { return "default" }
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
+    /// Vault names the hub publishes in `.well-known/parachute.json`.
+    private func listedVaults() async -> [String] {
+        struct Listing: Decodable { struct Vault: Decodable { let name: String }; let vaults: [Vault] }
+        let url = origin.appendingPathComponent(".well-known").appendingPathComponent("parachute.json")
+        guard let (data, response) = try? await session.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return [] }
+        return listing.vaults.map(\.name)
     }
 
     private func clientID(metadata: Metadata, redirect: URL) async throws -> String {
@@ -268,7 +372,10 @@ public actor ParachuteVaultConnection {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 401 { throw ParachuteVaultError.signInExpired }
         guard (200..<300).contains(status) else {
-            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            // `error_type` is the hub's wire contract; prose may be reworded.
+            if status == 409, let type = object?["error_type"] as? String { throw ParachuteVaultError.http(409, type) }
+            let message = (object?["message"] ?? object?["error"]) as? String
             throw ParachuteVaultError.http(status, message.map { String($0.prefix(200)) })
         }
         return data
@@ -300,6 +407,18 @@ public actor ParachuteVaultConnection {
     }
 }
 
+/// A metadata value as the vault's tag schemas expect it: text, a list or a whole number.
+public enum ParachuteMetadataValue: Sendable, Equatable, ExpressibleByStringLiteral, ExpressibleByArrayLiteral, ExpressibleByIntegerLiteral {
+    case text(String), list([String]), number(Int)
+    public init(stringLiteral value: String) { self = .text(value) }
+    public init(arrayLiteral elements: String...) { self = .list(elements) }
+    public init(integerLiteral value: Int) { self = .number(value) }
+    public var text: String? { if case .text(let value) = self { value } else { nil } }
+    var json: Any {
+        switch self { case .text(let value): value; case .list(let values): values; case .number(let value): value }
+    }
+}
+
 /// The vault note for one meeting: a readable path inside the chosen folder,
 /// Markdown without front matter (the vault keeps metadata separately).
 public enum ParachuteMeetingNote {
@@ -308,22 +427,43 @@ public enum ParachuteMeetingNote {
         "parachute-note:\(vaultURL.absoluteString):\(meetingID)"
     }
 
+    /// Where meeting notes go unless the person picks another folder: an inbox
+    /// that agents process, like other transcript sources.
+    public static let defaultFolder = "vault/_inbox/transcripts/minutes"
+    /// `transcript` puts the note in agents' processing queue; `minutes` names its source.
+    public static let tags = ["meeting", "transcript", "minutes"]
+
     /// Saves the bundle to the connected vault, updating `previous` when given.
     public static func save(_ bundle: MeetingExportBundle, folder: String, previous: ParachuteNoteReceipt?,
                             using connection: ParachuteVaultConnection) async throws -> ParachuteNoteReceipt {
-        try await connection.saveNote(path: path(folder: folder, meeting: bundle.meeting), content: content(bundle: bundle),
-                                      tags: ["meeting"], metadata: metadata(bundle: bundle), previous: previous)
+        let text = content(bundle: bundle)
+        var values = metadata(bundle: bundle)
+        values["minutes_content_hash"] = .text(contentHash(text))
+        return try await connection.saveNote(path: path(folder: folder, meeting: bundle.meeting), content: text,
+                                             tags: tags, metadata: values, previous: previous, meetingID: bundle.meeting.id)
     }
 
+    /// `<folder>/<yyyy-MM-dd>-<title-slug>`, the shape other transcript sources use.
     public static func path(folder: String, meeting: Meeting) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd HHmm"
-        let title = meeting.title.components(separatedBy: CharacterSet(charactersIn: "/\\:\n\r\t")).joined(separator: "-")
-            .trimmingCharacters(in: .whitespaces)
         let base = folder.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")).components(separatedBy: "/")
             .filter { !$0.isEmpty && $0 != "." && $0 != ".." }.joined(separator: "/")
-        let name = formatter.string(from: meeting.startedAt) + " " + (title.isEmpty ? "Meeting" : String(title.prefix(120)))
+        let name = day(meeting.startedAt) + "-" + slug(meeting.title)
         return base.isEmpty ? name : base + "/" + name
+    }
+
+    /// Lowercase ASCII words joined by hyphens; "meeting" when nothing is left.
+    static func slug(_ title: String) -> String {
+        let folded = title.folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX")).lowercased()
+        let words = folded.split { !($0.isASCII && ($0.isLetter || $0.isNumber)) }
+        var result = ""
+        for word in words where result.count + word.count < 80 { result += (result.isEmpty ? "" : "-") + word }
+        return result.isEmpty ? "meeting" : result
+    }
+
+    static func day(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
     public static func content(bundle: MeetingExportBundle) -> String {
@@ -332,10 +472,31 @@ public enum ParachuteMeetingNote {
         return String(rendered[end.upperBound...]).trimmingCharacters(in: .newlines)
     }
 
-    public static func metadata(bundle: MeetingExportBundle) -> [String: String] {
+    /// Fields named as the vault's `meeting` and `transcript` schemas declare them.
+    public static func metadata(bundle: MeetingExportBundle) -> [String: ParachuteMetadataValue] {
+        let meeting = bundle.meeting
         let formatter = ISO8601DateFormatter()
-        var values = ["source": "minutes", "minutes_meeting_id": bundle.meeting.id, "date": formatter.string(from: bundle.meeting.startedAt)]
-        if !bundle.attendees.isEmpty { values["attendees"] = bundle.attendees.map(\.displayName).joined(separator: ", ") }
+        var values: [String: ParachuteMetadataValue] = [
+            "type": "transcript", "source": "minutes", "source_id": .text(meeting.id), "minutes_meeting_id": .text(meeting.id),
+            "title": .text(meeting.title), "date": .text(day(meeting.startedAt)), "start": .text(formatter.string(from: meeting.startedAt)),
+        ]
+        if let end = meeting.endedAt {
+            values["end"] = .text(formatter.string(from: end))
+            values["duration_minutes"] = .number(max(1, Int((end.timeIntervalSince(meeting.startedAt) / 60).rounded())))
+        }
+        if !bundle.attendees.isEmpty {
+            values["attendees"] = .list(bundle.attendees.map(\.displayName))
+            let emails = bundle.attendees.flatMap(\.emails)
+            if !emails.isEmpty { values["attendeeEmails"] = .list(emails) }
+        }
+        if let event = meeting.calendarEventId, !event.isEmpty { values["calendarEventId"] = .text(event) }
         return values
+    }
+
+    /// Fingerprint of the note text Minutes wrote. Line endings and surrounding
+    /// whitespace are normalized because a hub may store them differently.
+    public static func contentHash(_ content: String) -> String {
+        let normalized = content.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return SHA256.hash(data: Data(normalized.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 }

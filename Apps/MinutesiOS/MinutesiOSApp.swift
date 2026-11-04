@@ -383,6 +383,7 @@ private struct IOSRootView: View {
                     Section("Permissions") {
                         Button("Allow microphone") { Task { _ = await state.permissionManager.requestMicrophoneAccess() } }
                     }
+                    SpeakerNamingSettings(appState: state)
                     Section("Remembered voices") {
                         ForEach(state.voiceprints) { voiceprint in
                             HStack {

@@ -44,10 +44,10 @@ private final class FakeHub: URLProtocol, @unchecked Sendable {
         return try ParachuteVaultConnection(origin: URL(string: "https://Hub.invalid/vault/default")!, credentialStore: credentials, session: URLSession(configuration: config))
     }
 
-    private func signIn(_ vault: ParachuteVaultConnection) async throws -> ParachuteVaultStatus {
+    private func signIn(_ vault: ParachuteVaultConnection, scope: String = "vault:write") async throws -> ParachuteVaultStatus {
         try await vault.connect { url, receiver, state in
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
-            #expect(items.first { $0.name == "scope" }?.value == "vault:write")
+            #expect(items.first { $0.name == "scope" }?.value == scope)
             #expect(items.first { $0.name == "code_challenge_method" }?.value == "S256")
             #expect(items.first { $0.name == "redirect_uri" }?.value == receiver.redirectURI.absoluteString)
             return URL(string: receiver.redirectURI.absoluteString + "?code=granted&state=" + state)!
@@ -83,6 +83,20 @@ private final class FakeHub: URLProtocol, @unchecked Sendable {
         #expect(try await vault.status()?.vault == "work")
         await vault.disconnect()
         #expect(try await vault.status() == nil)
+    }
+
+    @Test("Sign-in asks for the hub's default vault by name, so no all-vaults choice is offered")
+    func signInNamesDefaultVault() async throws {
+        FakeHub.reset([
+            "GET /.well-known/oauth-authorization-server": (200, metadata),
+            "GET /.well-known/parachute.json": (200, #"{"vaults":[{"name":"work"},{"name":"default"}]}"#),
+            "POST /oauth/register": (201, #"{"client_id":"client-1"}"#),
+            "POST /oauth/token": (200, #"{"access_token":"at-1","expires_in":900,"scope":"vault:default:write","vault":"default"}"#),
+        ])
+        let status = try await signIn(try connection(VaultTestCredentials()), scope: "vault:default:write")
+        #expect(status.vault == "default")
+        #expect(ParachuteVaultConnection.preferredVault(among: [], listed: ["only"]) == "only")
+        #expect(ParachuteVaultConnection.preferredVault(among: [], listed: ["a", "b"]) == nil)
     }
 
     @Test("A grant without a vault is revoked and reported")
@@ -126,10 +140,139 @@ private final class FakeHub: URLProtocol, @unchecked Sendable {
     func noteShape() {
         var components = DateComponents(); components.year = 2026; components.month = 10; components.day = 19; components.hour = 9; components.minute = 5
         let meeting = Meeting(id: "m1", title: "Product / Tactical", startedAt: Calendar.current.date(from: components)!)
-        #expect(ParachuteMeetingNote.path(folder: "/Meetings/../Work/", meeting: meeting) == "Meetings/Work/2026-10-19 0905 Product - Tactical")
+        #expect(ParachuteMeetingNote.path(folder: "/Meetings/../Work/", meeting: meeting) == "Meetings/Work/2026-10-19-product-tactical")
+        #expect(ParachuteMeetingNote.path(folder: ParachuteMeetingNote.defaultFolder, meeting: Meeting(id: "m2", title: "Café — 1:1 ✨", startedAt: meeting.startedAt))
+                == "vault/_inbox/transcripts/minutes/2026-10-19-cafe-1-1")
+        #expect(ParachuteMeetingNote.slug("会议") == "meeting")
+        var ended = meeting; ended.endedAt = meeting.startedAt.addingTimeInterval(1_800); ended.calendarEventId = "evt-1"
+        let ana = Person(id: "p1", displayName: "Ana", emails: ["ana@example.com"])
+        let values = ParachuteMeetingNote.metadata(bundle: .init(meeting: ended, attendees: [ana], clusters: [], utterances: [], summary: nil))
+        #expect(values["attendees"] == ["Ana"] && values["attendeeEmails"] == ["ana@example.com"])
+        #expect(values["date"] == "2026-10-19" && values["duration_minutes"] == 30 && values["type"] == "transcript")
+        #expect(values["calendarEventId"] == "evt-1" && values["source"] == "minutes")
+        #expect(ParachuteMeetingNote.tags.contains("transcript"))
         let utterance = Utterance(id: 1, meetingId: "m1", clusterId: "", speakerName: "Ana", start: 65, end: 70, text: "Ship it.")
         let summary = MeetingSummary(meetingId: "m1", title: meeting.title, overview: "", markdown: "- Ship Friday [T0001]")
         let content = ParachuteMeetingNote.content(bundle: .init(meeting: meeting, attendees: [], clusters: [], utterances: [utterance], summary: summary))
         #expect(!content.hasPrefix("---") && content.contains("- Ship Friday (1:05)") && content.contains("**Ana** (1:05): Ship it."))
+    }
+
+    // MARK: One note per meeting across devices
+
+    private func signedInHub(_ extra: [String: (Int, String)]) async throws -> ParachuteVaultConnection {
+        var routes: [String: (Int, String)] = [
+            "GET /.well-known/oauth-authorization-server": (200, metadata),
+            "POST /oauth/register": (201, #"{"client_id":"client-1"}"#),
+            "POST /oauth/token": (200, #"{"access_token":"at-1","refresh_token":"rt-1","expires_in":900,"vault":"work"}"#),
+        ]
+        routes.merge(extra) { _, new in new }
+        FakeHub.reset(routes)
+        let vault = try connection(VaultTestCredentials())
+        _ = try await signIn(vault)
+        return vault
+    }
+
+    private func noteJSON(id: String, content: String, hash: String?, tags: [String] = ["meeting"], updated: String = "2026-11-04T10:00:00Z") -> String {
+        var metadata: [String: Any] = ["minutes_meeting_id": "m1", "source": "minutes"]
+        if let hash { metadata["minutes_content_hash"] = hash }
+        let object: [String: Any] = ["id": id, "path": "Meetings/x", "content": content, "tags": tags, "metadata": metadata, "updatedAt": updated]
+        return String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    }
+
+    private func save(_ vault: ParachuteVaultConnection, _ content: String, previous: ParachuteNoteReceipt?) async throws -> ParachuteNoteReceipt {
+        try await vault.saveNote(path: "Meetings/x", content: content, tags: ["meeting"],
+                                 metadata: ["minutes_meeting_id": "m1", "minutes_content_hash": .text(ParachuteMeetingNote.contentHash(content))],
+                                 previous: previous, meetingID: "m1")
+    }
+
+    @Test("A device without a receipt adopts the note another device created instead of making a second one")
+    func adoptsExistingNote() async throws {
+        let old = noteJSON(id: "note-1", content: "Old body", hash: ParachuteMeetingNote.contentHash("Old body"))
+        let vault = try await signedInHub([
+            "GET /vault/work/api/notes": (200, "[\(old)]"),
+            "PATCH /vault/work/api/notes/note-1": (200, #"{"id":"note-1","updatedAt":"2026-11-04T11:00:00Z"}"#),
+        ])
+        let receipt = try await save(vault, "New body", previous: nil)
+        #expect(receipt.id == "note-1")
+        #expect(FakeHub.requests("POST /vault/work/api/notes").isEmpty)
+        let patch = try #require(FakeHub.requests("PATCH /vault/work/api/notes/note-1").first?.2)
+        let body = try #require(try JSONSerialization.jsonObject(with: patch) as? [String: Any])
+        #expect(body["if_updated_at"] as? String == "2026-11-04T10:00:00Z")
+    }
+
+    @Test("A note an agent moved elsewhere is left where it is, even with its text unchanged")
+    func movedNoteLeftAlone() async throws {
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(noteJSON(id: "note-1", content: "Body", hash: ParachuteMeetingNote.contentHash("Body")).utf8)) as? [String: Any])
+        object["path"] = "vault/projects/alpha/meetings/x"
+        var metadata = try #require(object["metadata"] as? [String: Any]); metadata["minutes_path"] = "Meetings/x"; object["metadata"] = metadata
+        let moved = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        let vault = try await signedInHub(["GET /vault/work/api/notes": (200, "[\(moved)]")])
+        await #expect(throws: ParachuteVaultError.editedInVault) { _ = try await save(vault, "New body", previous: nil) }
+        #expect(FakeHub.requests("PATCH /vault/work/api/notes/note-1").isEmpty)
+    }
+
+    @Test("Updates never send a path, so a note is never moved; new notes record where they were put")
+    func updatesDoNotMove() async throws {
+        let old = noteJSON(id: "note-1", content: "Old body", hash: ParachuteMeetingNote.contentHash("Old body"))
+        let vault = try await signedInHub([
+            "GET /vault/work/api/notes": (200, "[\(old)]"),
+            "PATCH /vault/work/api/notes/note-1": (200, #"{"id":"note-1","updatedAt":"2026-11-04T11:00:00Z"}"#),
+        ])
+        _ = try await save(vault, "New body", previous: nil)
+        let patchData = try #require(FakeHub.requests("PATCH /vault/work/api/notes/note-1").first?.2)
+        let patch = try #require(try JSONSerialization.jsonObject(with: patchData) as? [String: Any])
+        #expect(patch["path"] == nil && (patch["metadata"] as? [String: Any])?["minutes_path"] == nil)
+
+        let fresh = try await signedInHub(["POST /vault/work/api/notes": (201, #"{"id":"note-2","updatedAt":"2026-11-04T11:00:00Z"}"#)])
+        _ = try await save(fresh, "Body", previous: nil)
+        let postData = try #require(FakeHub.requests("POST /vault/work/api/notes").first?.2)
+        let post = try #require(try JSONSerialization.jsonObject(with: postData) as? [String: Any])
+        #expect((post["metadata"] as? [String: Any])?["minutes_path"] as? String == "Meetings/x")
+    }
+
+    @Test("An unchanged meeting is not written again")
+    func skipsIdenticalNote() async throws {
+        let same = noteJSON(id: "note-1", content: "Body", hash: ParachuteMeetingNote.contentHash("Body"))
+        let vault = try await signedInHub(["GET /vault/work/api/notes": (200, "[\(same)]")])
+        #expect(try await save(vault, "Body", previous: nil).id == "note-1")
+        #expect(FakeHub.requests("PATCH /vault/work/api/notes/note-1").isEmpty && FakeHub.requests("POST /vault/work/api/notes").isEmpty)
+    }
+
+    @Test("A note found by meeting id that someone edited is left alone")
+    func foundEditedNoteIsLeftAlone() async throws {
+        let edited = noteJSON(id: "note-1", content: "Body plus an agent's notes", hash: ParachuteMeetingNote.contentHash("Body"))
+        let vault = try await signedInHub(["GET /vault/work/api/notes": (200, "[\(edited)]")])
+        await #expect(throws: ParachuteVaultError.editedInVault) { _ = try await save(vault, "New body", previous: nil) }
+        #expect(FakeHub.requests("POST /vault/work/api/notes").isEmpty)
+    }
+
+    @Test("A conflict caused by another Minutes device is retried; one caused by an agent stops updates")
+    func conflictOwnership() async throws {
+        let receipt = ParachuteNoteReceipt(id: "note-1", updatedAt: "2026-11-04T09:00:00Z")
+        // Another device wrote exactly what Minutes renders: retry with the new stamp.
+        let fromDevice = noteJSON(id: "note-1", content: "Phone body", hash: ParachuteMeetingNote.contentHash("Phone body"))
+        var vault = try await signedInHub([
+            "PATCH /vault/work/api/notes/note-1": (409, #"{"error_type":"conflict"}"#),
+            "GET /vault/work/api/notes/note-1": (200, fromDevice),
+        ])
+        await #expect(throws: (any Error).self) { _ = try await save(vault, "Mac body", previous: receipt) }
+        let patches = FakeHub.requests("PATCH /vault/work/api/notes/note-1").compactMap(\.2)
+            .compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        #expect(patches.count == 2 && patches[1]["if_updated_at"] as? String == "2026-11-04T10:00:00Z")
+
+        // An agent added a tag: Minutes stops.
+        let tagged = noteJSON(id: "note-1", content: "Phone body", hash: ParachuteMeetingNote.contentHash("Phone body"), tags: ["meeting", "followup"])
+        vault = try await signedInHub([
+            "PATCH /vault/work/api/notes/note-1": (409, #"{"error_type":"conflict"}"#),
+            "GET /vault/work/api/notes/note-1": (200, tagged),
+        ])
+        await #expect(throws: ParachuteVaultError.editedInVault) { _ = try await save(vault, "Mac body", previous: receipt) }
+        #expect(FakeHub.requests("PATCH /vault/work/api/notes/note-1").count == 1)
+    }
+
+    @Test("Content fingerprints ignore line endings and surrounding whitespace")
+    func contentHashNormalizes() {
+        #expect(ParachuteMeetingNote.contentHash("a\r\nb\n") == ParachuteMeetingNote.contentHash("a\nb"))
+        #expect(ParachuteMeetingNote.contentHash("a") != ParachuteMeetingNote.contentHash("b"))
     }
 }

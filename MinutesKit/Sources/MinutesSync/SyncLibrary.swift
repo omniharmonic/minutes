@@ -41,6 +41,10 @@ struct MeetingSyncPayload: Codable {
     var summary: MeetingSummary?
     var bookmarks: [Bookmark]
     var clusters: [SpeakerCluster]
+    /// Parachute note receipts (`parachute-note:<vault>:<meeting>` → receipt JSON),
+    /// so another device updates the same vault note instead of creating one.
+    /// Omitted when the meeting was never saved to a vault.
+    var parachuteNotes: [String: String]? = nil
 }
 
 /// Describes an audio file so a change is noticed without reading it.
@@ -146,7 +150,8 @@ public final class SyncLibrary: @unchecked Sendable {
             utterances: store.listUtterances(meetingId: meeting.id).sorted { $0.id < $1.id },
             summary: store.getSummary(meetingId: meeting.id),
             bookmarks: store.listBookmarks(meetingId: meeting.id).sorted { $0.id < $1.id },
-            clusters: clusters.sorted { $0.id < $1.id })
+            clusters: clusters.sorted { $0.id < $1.id },
+            parachuteNotes: try store.parachuteReceipts(meetingID: meeting.id).nilIfEmpty)
     }
 
     // MARK: Change detection
@@ -311,6 +316,10 @@ public final class SyncLibrary: @unchecked Sendable {
             try store.replaceSpeakerClusters(meetingId: id, with: payload.clusters)
             try store.replaceBookmarks(meetingId: id, with: payload.bookmarks)
             if let summary = payload.summary { try store.saveSummary(summary) }
+            // Receipts only accumulate; a device never forgets a note another device made.
+            for (key, value) in payload.parachuteNotes ?? [:] where key.hasPrefix("parachute-note:") && key.hasSuffix(":" + id) {
+                try store.setLibrarySetting(key, value: value)
+            }
             let currentFolder = try store.folderMembership(meetingID: id)?.folderID
             if currentFolder != payload.folderID {
                 if let folder = payload.folderID, !(try store.listFolders().contains { $0.id == folder }) {
@@ -344,6 +353,10 @@ public final class SyncLibrary: @unchecked Sendable {
             case "userNotes":
                 let mine = (localValue as? String) ?? "", theirs = (remoteValue as? String) ?? ""
                 result[key] = mine.isEmpty ? theirs : (theirs.isEmpty ? mine : mine + "\n\n— Edited on another device —\n" + theirs)
+            case "parachuteNotes":
+                // Union by vault; for the same vault the remote receipt wins.
+                let mine = localValue as? [String: Any] ?? [:], theirs = remoteValue as? [String: Any] ?? [:]
+                result[key] = mine.merging(theirs) { _, remote in remote }
             case "bookmarks":
                 result[key] = mergeByID(base: baseValue as? [[String: Any]] ?? [], local: localValue as? [[String: Any]] ?? [], remote: remoteValue as? [[String: Any]] ?? [])
             default:
@@ -371,4 +384,8 @@ public final class SyncLibrary: @unchecked Sendable {
         case (let a?, nil), (nil, let a?): return a is NSNull
         }
     }
+}
+
+private extension Dictionary {
+    var nilIfEmpty: Self? { isEmpty ? nil : self }
 }

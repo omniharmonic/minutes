@@ -157,8 +157,16 @@ public final class SpeakerMatcher: Sendable {
     public let requiredModel: String?
     public let allowAutomaticAssignment: Bool
     public let minimumMargin: Double
+    /// Automatic naming never goes below these, whatever the thresholds say.
+    public let automaticSimilarityFloor: Double
+    public let automaticMarginFloor: Double
+    public let automaticMinimumSpeechSeconds: Double
     
-    public init(autoThreshold: Double = 0.68, suggestThreshold: Double = 0.52, attendeeBonus: Double = 0.08, requiredModel: String? = SpeakerEmbeddingModel.trainedID, allowAutomaticAssignment: Bool = false, minimumMargin: Double = 0.06) {
+    public init(autoThreshold: Double = 0.68, suggestThreshold: Double = 0.52, attendeeBonus: Double = 0.08, requiredModel: String? = SpeakerEmbeddingModel.trainedID, allowAutomaticAssignment: Bool = false, minimumMargin: Double = 0.06,
+                automaticSimilarityFloor: Double = 0.88, automaticMarginFloor: Double = 0.12, automaticMinimumSpeechSeconds: Double = 5) {
+        self.automaticSimilarityFloor = automaticSimilarityFloor
+        self.automaticMarginFloor = automaticMarginFloor
+        self.automaticMinimumSpeechSeconds = automaticMinimumSpeechSeconds
         self.autoThreshold = autoThreshold
         self.suggestThreshold = suggestThreshold
         self.attendeeBonus = attendeeBonus
@@ -226,7 +234,7 @@ public final class SpeakerMatcher: Sendable {
                     .map { VectorMath.cosineSimilarity(c.centroid, $0.vector) }.max() ?? 0
                 let automaticEligible = requiredModel == nil ||
                     (requiredModel == SpeakerEmbeddingModel.trainedID && c.speechSeconds.isFinite &&
-                     c.speechSeconds >= 5 && learnedSimilarity >= max(0.88, autoThreshold))
+                     c.speechSeconds >= automaticMinimumSpeechSeconds && learnedSimilarity >= max(automaticSimilarityFloor, autoThreshold))
                 // An automatic candidate's score, margin and reported similarity
                 // must come from the same eligible learned evidence. A short
                 // exact-match profile must not inflate a weaker long profile.
@@ -247,7 +255,7 @@ public final class SpeakerMatcher: Sendable {
         }
         
         // Abstain when another person's compatible profile is too close. Scores are similarity, not calibrated probability.
-        let margin = allowAutomaticAssignment && requiredModel != nil ? max(0.12, minimumMargin) : minimumMargin
+        let margin = allowAutomaticAssignment && requiredModel != nil ? max(automaticMarginFloor, minimumMargin) : minimumMargin
         if margin > 0 {
             let grouped=Dictionary(grouping:allScores,by:{$0.clusterId})
             let ambiguous=Set(grouped.compactMap { id, scores -> String? in

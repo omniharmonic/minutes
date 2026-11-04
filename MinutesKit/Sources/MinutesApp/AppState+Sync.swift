@@ -85,6 +85,7 @@ extension AppState {
         meetings = store.listMeetings()
         reloadFolderLibrary()
         if let id = selectedMeetingId, store.getMeeting(id: id) != nil, !isRecording { selectMeeting(id: id) }
+        Task { await saveQueuedParachuteMeetings() }
     }
 }
 #endif

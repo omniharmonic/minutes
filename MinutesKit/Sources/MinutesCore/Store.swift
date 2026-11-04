@@ -50,6 +50,40 @@ extension MinutesStore {
         }
     }
 
+    /// Library values whose key starts with `prefix`, in key order.
+    public func librarySettings(prefix: String) throws -> [(key: String, value: String)] {
+        var rows: [(key: String, value: String)] = []
+        try withImmediateTransaction {
+            rows = try folderStatement("SELECT key, value FROM library_settings WHERE substr(key, 1, length(?)) = ? ORDER BY key", values: [prefix, prefix]) { statement in
+                var found: [(key: String, value: String)] = []
+                while true {
+                    let code = sqlite3_step(statement)
+                    if code == SQLITE_DONE { break }
+                    guard code == SQLITE_ROW else { throw databaseError("Read library settings") }
+                    found.append((String(cString: sqlite3_column_text(statement, 0)), String(cString: sqlite3_column_text(statement, 1))))
+                }
+                return found
+            }
+        }
+        return rows
+    }
+
+    /// Where a meeting was saved in Parachute vaults: key `parachute-note:<vault URL>:<meeting id>`.
+    /// Shared through iCloud with the meeting, so every device updates the same note.
+    public func parachuteReceipts(meetingID: String) throws -> [String: String] {
+        let suffix = ":" + meetingID
+        return Dictionary(try librarySettings(prefix: "parachute-note:").filter { $0.key.hasSuffix(suffix) }.map { ($0.key, $0.value) },
+                          uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Saves a receipt and marks the meeting changed so iCloud shares it.
+    public func setParachuteReceipt(key: String, value: String?, meetingID: String) throws {
+        try withImmediateTransaction {
+            try setLibrarySetting(key, value: value)
+            try folderWrite("INSERT OR IGNORE INTO sync_dirty(record_name) VALUES (?)", values: ["Meeting:" + meetingID])
+        }
+    }
+
     private func folderStatement<T>(_ sql: String, values: [String?] = [], _ body: (OpaquePointer) throws -> T) throws -> T {
         var pointer: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &pointer, nil) == SQLITE_OK, let statement = pointer else { throw databaseError("Prepare folder operation") }

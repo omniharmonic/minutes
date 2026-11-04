@@ -348,3 +348,16 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 2026-10-21: Mac 71 published (v1.0.0-71, appcast serves 71). iOS 62 uploaded, delivery 8ded76c5-87a4-492d-ac13-f40090c9b56f; owner adds it to Minutes Public Beta and submits it for review. A development build of 62 is installed on the owner's iPhone.
 
 2026-10-22: iPhone summaries failed on iOS 27 because Apple's model reports guardrail declines as `LanguageModelError`, which was unmapped and failed the whole summary. Summaries now request plain text under `permissiveContentTransformations` first (evidence as `[T0001] Speaker: text` lines with a worked example), fall back to guided generation, normalize loose citations, skip and disclose declined chunks, and save labeled transcript highlights when the model produces nothing usable. An earlier version of the fix (guided first, text fallback) completed the pending summary on the owner's iPhone; the final version was verified on the Mac with the owner's 12-minute meeting (complete draft, no skipped sections, 90 s). iOS 63 uploaded, delivery 1f8ba2d9-42c0-47c5-8951-71a987565c31, VALID; owner adds it to Minutes Public Beta.
+
+### 2026-11-04 — Parachute sync across devices, automatic speaker names
+- [x] Parachute sign-in: the server address is a visible, bordered field with an example; Sign In is never greyed out (it explains when the address is missing).
+- [x] One note per meeting on every device: receipts sync through iCloud, lookup by `minutes_meeting_id` before create, a content fingerprint tells another Minutes device's write from an agent's edit, and Minutes stops updating a note once someone else edits it. Durable retry queue; every finished summary is saved.
+- [x] `SpeakerAutoLabelPolicy` (Cautious/Balanced/Eager/Custom, last-invitee rule), on at Balanced by default; Settings → General on Mac, Settings on iPhone. `minutes-cli speakers calibrate [--detail]`; `process --speaker-policy off|cautious|balanced|eager`.
+- [x] Renaming a speaker rewrites generic labels in the summary and updates the vault note.
+- [x] Sign-in asks the hub for one named vault (`vault:default:write` when the hub lists `default`). The hub's "All vaults" choice grants an account connection (`account:vaults`), not vault access, so Minutes no longer triggers its picker.
+- [x] Notes follow the vault's transcript inbox: `vault/_inbox/transcripts/minutes/<yyyy-MM-dd>-<slug>`, tags `meeting`, `transcript`, `minutes`, metadata per the `meeting`/`transcript` schemas (list `attendees`, `duration_minutes`, `calendarEventId`). The old saved default `Meetings` migrates. Updates never move a note; a note found away from its recorded `minutes_path` counts as agent work and is left alone.
+- [x] 474 model-free tests pass; iOS simulator and device builds pass.
+- [x] Owner: signed in on Mac and iPhone; meetings from both devices produced exactly one vault note each with no schema warnings; iCloud sync and Parachute sync together made no duplicates.
+
+2026-11-04: Mac 72 and iOS 64 built for release with the above.
+

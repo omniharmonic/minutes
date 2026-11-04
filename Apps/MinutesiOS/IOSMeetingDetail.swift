@@ -350,6 +350,8 @@ private struct IOSSpeakerAssignment: View {
 
     private func confirm() {
         guard let meeting = state.currentMeeting else { return }
+        let before = TranscriptSpeakerLabels.readableUtterances(state.store.listUtterances(meetingId: meeting.id),
+                                                                clusters: state.store.listSpeakerClusters(meetingId: meeting.id))
         let people = state.store.listPeople()
         let normalizedEmail = NameResolver.cleanEmail(email)
         let person = people.first(where: { $0.id == existingPersonID }) ??
@@ -376,6 +378,7 @@ private struct IOSSpeakerAssignment: View {
                 }
             }
             state.voiceprints = state.store.listVoiceprints()
+            state.speakersChanged(meetingID: meeting.id, before: before)
             state.selectMeeting(id: meeting.id)
             dismiss()
         } catch { self.error = error.localizedDescription }
@@ -383,6 +386,8 @@ private struct IOSSpeakerAssignment: View {
 
     private func keepUnknown() {
         guard let meeting = state.currentMeeting else { return }
+        let before = TranscriptSpeakerLabels.readableUtterances(state.store.listUtterances(meetingId: meeting.id),
+                                                                clusters: state.store.listSpeakerClusters(meetingId: meeting.id))
         do {
             try state.store.withImmediateTransaction {
                 var current = try currentSample(meetingID: meeting.id)
@@ -397,6 +402,7 @@ private struct IOSSpeakerAssignment: View {
                 }
                 try state.store.saveUtterances(utterances)
             }
+            state.speakersChanged(meetingID: meeting.id, before: before)
             state.selectMeeting(id: meeting.id)
             dismiss()
         } catch { self.error = error.localizedDescription }

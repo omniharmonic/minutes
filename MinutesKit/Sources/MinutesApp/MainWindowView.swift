@@ -741,12 +741,12 @@ public struct MainWindowView: View {
                     AudioPlaybackService.shared.play(from: time)
                 } },
                 onUtteranceEdited: { utterance in perform("save transcript") { try appState.store.saveUtterances([utterance]); appState.currentUtterances = TranscriptSpeakerLabels.readableUtterances(appState.store.listUtterances(meetingId: meeting.id), clusters: appState.currentClusters) } },
-                onSpeakerReassigned: { id, name in perform("assign speaker") { var utterances = appState.currentUtterances; if let i = utterances.firstIndex(where: { $0.id == id }) { utterances[i].speakerName = name; try appState.store.saveUtterances([utterances[i]]); appState.currentUtterances = utterances } } },
+                onSpeakerReassigned: { id, name in perform("assign speaker", meetingID: meeting.id) { var utterances = appState.currentUtterances; if let i = utterances.firstIndex(where: { $0.id == id }) { utterances[i].speakerName = name; try appState.store.saveUtterances([utterances[i]]); appState.currentUtterances = utterances } } },
                 onExportParachute: { Task { _ = await appState.exportCurrentMeeting(target: "parachute") } },
                 onExportMarkdown: { appState.prepareMarkdownExport() })
         case .speakers:
             ReviewSpeakersView(meeting: meeting, clusters: appState.currentClusters, attendees: appState.currentAttendees, utterances: appState.currentUtterances, voiceprints: appState.voiceprints,
-                onAssign: { id, person in perform("assign speaker") { var clusters = appState.currentClusters; if let i = clusters.firstIndex(where: { $0.id == id }) { clusters[i].label = person.displayName; clusters[i].personId = person.id; clusters[i].assignment = "user"; try appState.store.withTransaction { try appState.store.savePerson(person); try appState.store.saveSpeakerClusters(clusters) }; appState.currentClusters = clusters } } },
+                onAssign: { id, person in perform("assign speaker", meetingID: meeting.id) { var clusters = appState.currentClusters; if let i = clusters.firstIndex(where: { $0.id == id }) { clusters[i].label = person.displayName; clusters[i].personId = person.id; clusters[i].assignment = "user"; try appState.store.withTransaction { try appState.store.savePerson(person); try appState.store.saveSpeakerClusters(clusters) }; appState.currentClusters = clusters } } },
                 onLockAndEnroll: { confirmed in perform("remember voice") {
                     try appState.store.withImmediateTransaction {
                         for cluster in confirmed {
@@ -759,8 +759,8 @@ public struct MainWindowView: View {
                     appState.currentClusters = appState.store.listSpeakerClusters(meetingId: meeting.id)
                     appState.currentUtterances = appState.store.listUtterances(meetingId: meeting.id)
                 } },
-                onReassignUtterances: { id, name in perform("update transcript speakers") { var utterances = appState.currentUtterances; for i in utterances.indices where utterances[i].clusterId == id { utterances[i].speakerName = name }; try appState.store.saveUtterances(utterances); appState.currentUtterances = utterances } },
-                onKeepUnknown: { id in perform("keep speaker unknown") {
+                onReassignUtterances: { id, name in perform("update transcript speakers", meetingID: meeting.id) { var utterances = appState.currentUtterances; for i in utterances.indices where utterances[i].clusterId == id { utterances[i].speakerName = name }; try appState.store.saveUtterances(utterances); appState.currentUtterances = utterances } },
+                onKeepUnknown: { id in perform("keep speaker unknown", meetingID: meeting.id) {
                     var clusters = appState.currentClusters
                     guard let index = clusters.firstIndex(where: { $0.id == id }) else { return }
                     clusters[index].label = "Unknown speaker"
@@ -781,6 +781,14 @@ public struct MainWindowView: View {
     }
     private func perform(_ action: String, _ operation: () throws -> Void) {
         do { try operation() } catch { appState.statusMessage = "Could not \(action): \(error.localizedDescription)" }
+    }
+    /// A speaker change: also carries new names into the summary and the vault note.
+    private func perform(_ action: String, meetingID: String, _ operation: () throws -> Void) {
+        let before = appState.currentUtterances
+        do {
+            try operation()
+            appState.speakersChanged(meetingID: meetingID, before: before)
+        } catch { appState.statusMessage = "Could not \(action): \(error.localizedDescription)" }
     }
 }
 private struct SidebarWidthPreference: PreferenceKey {

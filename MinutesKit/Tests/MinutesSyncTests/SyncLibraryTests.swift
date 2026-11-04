@@ -110,6 +110,25 @@ struct SyncLibraryTests {
         #expect(try mac.library.pendingChanges().isEmpty && phone.library.pendingChanges().isEmpty)
     }
 
+    @Test("The vault note a meeting was saved to travels with it, so the other device updates that note")
+    func parachuteReceiptTravels() throws {
+        let cloud = FakeCloud(), mac = try Device(), phone = try Device()
+        try seedMeeting(mac)
+        try mac.sync(cloud); try phone.sync(cloud)
+        #expect(try phone.store.parachuteReceipts(meetingID: "m1").isEmpty)
+        let key = "parachute-note:https://hub.invalid/vault/work:m1"
+        try mac.store.setParachuteReceipt(key: key, value: #"{"id":"note-1"}"#, meetingID: "m1")
+        #expect(try mac.library.pendingChanges().contains(.save(SyncRecordName(kind: .meeting, id: "m1"))))
+        try mac.sync(cloud); try phone.sync(cloud)
+        #expect(try phone.store.parachuteReceipts(meetingID: "m1") == [key: #"{"id":"note-1"}"#])
+        // Receipts for different vaults saved on each device are both kept.
+        let other = "parachute-note:https://hub.invalid/vault/home:m1"
+        try phone.store.setParachuteReceipt(key: other, value: #"{"id":"note-9"}"#, meetingID: "m1")
+        try phone.sync(cloud); try mac.sync(cloud)
+        #expect(try mac.store.parachuteReceipts(meetingID: "m1").count == 2)
+        #expect(try mac.library.pendingChanges().isEmpty && phone.library.pendingChanges().isEmpty)
+    }
+
     @Test("Edits on both devices merge: title from one, a moment from the other, both versions of notes")
     func concurrentEditsMerge() throws {
         let cloud = FakeCloud(), mac = try Device(), phone = try Device()

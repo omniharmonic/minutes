@@ -30,7 +30,7 @@ import MinutesExport
         case "export":
             guard arguments.count > 3, let meeting = store.getMeeting(id: arguments[3]) else { print("Meeting not found."); exit(1) }
             guard let status = try await connection.status(allowInteraction: true) else { throw ParachuteVaultError.notConnected }
-            var folder = "Meetings"
+            var folder = ParachuteMeetingNote.defaultFolder
             if let flag = arguments.firstIndex(of: "--folder"), flag + 1 < arguments.count { folder = arguments[flag + 1] }
             let clusters = store.listSpeakerClusters(meetingId: meeting.id)
             let bundle = MeetingExportBundle(meeting: meeting, attendees: store.listPeopleForMeeting(meetingId: meeting.id), clusters: clusters,
@@ -39,7 +39,7 @@ import MinutesExport
             let key = ParachuteMeetingNote.receiptKey(vaultURL: status.vaultURL, meetingID: meeting.id)
             let previous = try store.librarySetting(key).flatMap { try? JSONDecoder().decode(ParachuteNoteReceipt.self, from: Data($0.utf8)) }
             let receipt = try await ParachuteMeetingNote.save(bundle, folder: folder, previous: previous, using: connection)
-            try store.setLibrarySetting(key, value: String(decoding: try JSONEncoder().encode(receipt), as: UTF8.self))
+            try store.setParachuteReceipt(key: key, value: String(decoding: try JSONEncoder().encode(receipt), as: UTF8.self), meetingID: meeting.id)
             print("Saved to \(status.vault): \(ParachuteMeetingNote.path(folder: folder, meeting: meeting)) (note \(receipt.id))")
         default:
             print("Unknown vault command: \(arguments[2])"); exit(1)

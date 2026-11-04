@@ -59,6 +59,7 @@ public struct SettingsView: View {
                 Text("On-device matching files confident matches. Manual folder choices are kept. Use Organize in the sidebar to file existing unfiled meetings.").font(.caption).foregroundStyle(.secondary)
                 if !appState.folderFilingMessage.isEmpty { Text(appState.folderFilingMessage).font(.caption).foregroundStyle(.secondary) }
             }
+            SpeakerNamingSettings(appState: appState)
             Section("Notes") {
                 Toggle("Summarize with Apple Intelligence", isOn: $appState.summaryUsesAppleIntelligence)
                 Picker("Default format", selection: $appState.summaryTemplate) {

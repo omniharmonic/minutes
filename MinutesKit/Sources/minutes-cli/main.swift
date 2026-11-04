@@ -47,6 +47,14 @@ func printHelp() {
     """)
 }
 
+/// `--speaker-policy off|cautious|balanced|eager` (default balanced, like the app).
+func cliSpeakerPolicy(_ args: [String]) -> SpeakerAutoLabelPolicy {
+    guard let index = args.firstIndex(of: "--speaker-policy"), index + 1 < args.count else { return .default }
+    let value = args[index + 1].lowercased()
+    if value == "off" { return .preset(.balanced, enabled: false) }
+    return SpeakerAutoLabelPolicy.Preset(rawValue: value).map { .preset($0) } ?? .default
+}
+
 func getStore(dataDir: String? = nil) throws -> MinutesStore {
     let dbPath: String
     if let dataDir = dataDir {
@@ -99,7 +107,7 @@ struct MinutesCLI {
                 let samples = try AudioDecoder.decode(fileURL: URL(fileURLWithPath: args[2]), targetSampleRate: 16000).samples
                 let result = try await DiarizationService().diarize(samples: samples, meetingId: "local-voice-audit")
                 let identified = RememberedSpeakerIdentification.apply(clusters: result.clusters, utterances: [],
-                    people: store.listPeople(), voiceprints: store.listVoiceprints())
+                    people: store.listPeople(), voiceprints: store.listVoiceprints(), policy: cliSpeakerPolicy(args))
                 let expected = identified.clusters.filter { $0.assignment == "auto" && $0.personId == expectedID }
                 let other = identified.clusters.filter { $0.assignment == "auto" && $0.personId != expectedID }
                 let seconds = expected.reduce(0) { $0 + $1.speechSeconds }
@@ -254,6 +262,7 @@ struct MinutesCLI {
                 return
             }
             if cmd == "voices" { try VoiceEnrollmentCLI.run(arguments: args, store: store); return }
+            if cmd == "speakers" { try SpeakerCalibrationCLI.run(arguments: args, store: store); return }
             if cmd == "audio" {
                 let library = dataDir ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Minutes").path
                 try await AudioCLI.run(arguments: args, store: store, managedDirectory: URL(fileURLWithPath: library).appendingPathComponent("audio", isDirectory: true))
@@ -344,7 +353,8 @@ struct MinutesCLI {
                     clusters: result.clusters, utterances: result.utterances,
                     people: store.listPeople(), voiceprints: store.listVoiceprints(),
                     existingClusters: store.listSpeakerClusters(meetingId: meetingId),
-                    attendeePersonIDs: Set(store.listPeopleForMeeting(meetingId: meetingId).map(\.id)))
+                    attendeePersonIDs: Set(store.listPeopleForMeeting(meetingId: meetingId).map(\.id)),
+                    policy: cliSpeakerPolicy(args))
                 let finalUtterances = identified.utterances
 
                 var updatedM = meeting

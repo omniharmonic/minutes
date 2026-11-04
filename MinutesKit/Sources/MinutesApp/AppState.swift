@@ -147,14 +147,19 @@ public final class AppState: ObservableObject {
     /// First-launch welcome finished, and the person agreed to tell others when they record.
     @Published public var welcomeCompleted = false { didSet { preferences.set(welcomeCompleted, forKey: "welcomeCompleted") } }
     @Published public var recordingConsentAcknowledged = false { didSet { preferences.set(recordingConsentAcknowledged, forKey: "recordingConsentAcknowledged") } }
-    @Published public var parachuteFolder = "Meetings" { didSet { preferences.set(parachuteFolder, forKey: "parachuteFolder") } }
+    @Published public var parachuteFolder = ParachuteMeetingNote.defaultFolder { didSet { preferences.set(parachuteFolder, forKey: "parachuteFolder") } }
     @Published public var autoExportParachute = false { didSet { preferences.set(autoExportParachute, forKey: "autoExportParachute") } }
+    /// How confident Minutes must be to name speakers on its own (on by default, Balanced).
+    @Published public var speakerAutoLabelPolicy: SpeakerAutoLabelPolicy = .default {
+        didSet { if let data = try? JSONEncoder().encode(speakerAutoLabelPolicy) { preferences.set(data, forKey: "speakerAutoLabelPolicy") } }
+    }
     @Published public internal(set) var parachuteVault: ParachuteVaultStatus?
     @Published public internal(set) var parachuteBusy = false
     @Published public var parachuteMessage = "Sign in to save meetings to your Parachute vault. Meetings stay on this device until you export them."
     var parachuteConnection: ParachuteVaultConnection?
     var parachuteSignIn: Task<Void, Never>?
     var parachuteSavesInFlight: Set<String> = []
+    var parachuteQueueRunning = false
     /// Opt-in iCloud sync between this person's devices.
     @Published public var iCloudSyncEnabled = false { didSet { preferences.set(iCloudSyncEnabled, forKey: "iCloudSyncEnabled"); librarySyncSettingChanged(from: oldValue) } }
     @Published public var iCloudSyncRecordings = false { didSet { preferences.set(iCloudSyncRecordings, forKey: "iCloudSyncRecordings"); if oldValue != iCloudSyncRecordings { restartLibrarySync() } } }
@@ -300,12 +305,16 @@ public final class AppState: ObservableObject {
         self.googleCalendarIDs = preferences.string(forKey: "googleCalendarIDs") ?? "primary"
         self.prismOrigin = preferences.string(forKey: "prismOrigin") ?? ""
         self.parachuteServer = preferences.string(forKey: "parachuteServer") ?? ""
-        self.parachuteFolder = preferences.string(forKey: "parachuteFolder") ?? "Meetings"
+        // "Meetings" was the old default; vault notes now go to the transcript inbox agents process.
+        let savedFolder = preferences.string(forKey: "parachuteFolder")
+        self.parachuteFolder = savedFolder == nil || savedFolder == "Meetings" ? ParachuteMeetingNote.defaultFolder : savedFolder!
         // Existing libraries skip the welcome; their owner has been recording already.
         let hasMeetings = !self.store.listMeetings().isEmpty
         self.welcomeCompleted = preferences.object(forKey: "welcomeCompleted") as? Bool ?? hasMeetings
         self.recordingConsentAcknowledged = preferences.object(forKey: "recordingConsentAcknowledged") as? Bool ?? hasMeetings
         self.autoExportParachute = preferences.bool(forKey: "autoExportParachute")
+        self.speakerAutoLabelPolicy = preferences.data(forKey: "speakerAutoLabelPolicy")
+            .flatMap { try? JSONDecoder().decode(SpeakerAutoLabelPolicy.self, from: $0) } ?? .default
         self.iCloudSyncEnabled = preferences.bool(forKey: "iCloudSyncEnabled")
         self.iCloudSyncRecordings = preferences.bool(forKey: "iCloudSyncRecordings")
         self.prismVaultID = preferences.string(forKey: "prismVaultID") ?? ""
@@ -1178,7 +1187,9 @@ public final class AppState: ObservableObject {
                         ? "Recording and transcript highlights saved. The on-device model could not write notes; regenerate the summary to try again."
                         : "Recording and transcript highlights saved. Enable Apple Intelligence summaries for an AI draft."
                 }
-                if drafted { await automaticallyExportToPrism(meetingID: meetingID); await automaticallyExportToParachute(meetingID: meetingID) }
+                if drafted { await automaticallyExportToPrism(meetingID: meetingID) }
+                // The vault gets every finished summary; a later regeneration updates the same note.
+                await automaticallyExportToParachute(meetingID: meetingID)
                 syncLibraryNow()
             } else {
                 statusMessage = "Recording processed. Changes made while preparing notes were preserved."
@@ -1287,7 +1298,8 @@ public final class AppState: ObservableObject {
                     clusters: result.clusters, utterances: result.utterances,
                     people: store.listPeople(), voiceprints: store.listVoiceprints(),
                     existingClusters: store.listSpeakerClusters(meetingId: meetingId),
-                    attendeePersonIDs: Set(store.listPeopleForMeeting(meetingId: meetingId).map(\.id)))
+                    attendeePersonIDs: Set(store.listPeopleForMeeting(meetingId: meetingId).map(\.id)),
+                    policy: speakerAutoLabelPolicy)
                 try store.saveSpeakerClusters(identified.clusters)
                 try store.saveUtterances(identified.utterances)
             }
@@ -1363,7 +1375,8 @@ public final class AppState: ObservableObject {
                 : (apple && Summarizer.isGeneratedDraft(summary) ? "On-device AI draft saved. Review it before sharing."
                    : apple ? "Transcript highlights saved. The on-device model could not write notes for this meeting."
                    : "Transcript highlights saved. No AI summary was generated.")
-            if apple { await automaticallyExportToPrism(meetingID: meeting.id); await automaticallyExportToParachute(meetingID: meeting.id) }
+            if apple { await automaticallyExportToPrism(meetingID: meeting.id) }
+            await refreshParachuteNoteIfSaved(meetingID: meeting.id)
             syncLibraryNow()
         } catch { statusMessage = "Summary failed: \(error.localizedDescription) Your existing notes and transcript are preserved." }
     }

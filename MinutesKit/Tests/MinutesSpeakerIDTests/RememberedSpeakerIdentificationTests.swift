@@ -99,3 +99,42 @@ extension RememberedSpeakerIdentificationTests {
         #expect(result.clusters.first?.assignment == "user")
     }
 }
+
+extension RememberedSpeakerIdentificationTests {
+    @Test func policyControlsHowSureMinutesMustBe() {
+        // Calibrated range: own voice ~0.70 is named at Balanced but not at Cautious or the old rule.
+        let input = cluster(0.70)
+        func name(_ policy: SpeakerAutoLabelPolicy) -> String? {
+            RememberedSpeakerIdentification.apply(clusters: [input], utterances: [], people: [person],
+                                                  voiceprints: [profile()], policy: policy).clusters.first?.personId
+        }
+        #expect(name(.default) == person.id)
+        #expect(name(.preset(.cautious)) == nil)
+        #expect(name(.legacy) == nil)
+        #expect(name(.preset(.balanced, enabled: false)) == nil)
+    }
+    @Test func balancedStillAbstainsWhenTwoRememberedVoicesAreClose() {
+        let other = Person(id: "other", displayName: "Other person")
+        let near = Voiceprint(personId: other.id, model: SpeakerEmbeddingModel.trainedID, vector: vector(0.95), speechSeconds: 30)
+        let result = RememberedSpeakerIdentification.apply(clusters: [cluster()], utterances: [], people: [person, other],
+                                                           voiceprints: [profile(), near], policy: .preset(.eager))
+        #expect(result.clusters.first?.personId == nil)
+    }
+    @Test func lastRemainingInviteeIsNamedOnlyWhenEnabledAndUnambiguous() {
+        let known = cluster()
+        var unknown = SpeakerCluster(id: "c2", meetingId: "meeting", trackId: "track", label: "Speaker 2",
+                                     centroid: [0, 0, 1] + Array(repeating: 0, count: 253), speechSeconds: 60,
+                                     embeddingModel: SpeakerEmbeddingModel.trainedID)
+        let guest = Person(id: "guest", displayName: "Guest")
+        var policy = SpeakerAutoLabelPolicy.default
+        func run() -> [SpeakerCluster] {
+            RememberedSpeakerIdentification.apply(clusters: [known, unknown], utterances: [], people: [person, guest],
+                                                  voiceprints: [profile()], attendeePersonIDs: [person.id, guest.id], policy: policy).clusters
+        }
+        #expect(run().last?.personId == nil)
+        policy.nameLastInvitee = true
+        #expect(run().last?.personId == guest.id && run().last?.assignment == "auto")
+        unknown.speechSeconds = 3 // a fragment cannot claim the name
+        #expect(run().last?.personId == nil)
+    }
+}
