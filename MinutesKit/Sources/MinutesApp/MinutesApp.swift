@@ -9,6 +9,8 @@ public final class AppStartup: ObservableObject {
     @Published public private(set) var errorMessage: String?
     private let databasePath: String?
     private let libraryDirectory: URL?
+    /// Started only while the `controlSocketEnabled` setting is on.
+    private var controlServer: ControlServer?
 
     public init(databasePath: String? = nil, libraryDirectory: URL? = nil) {
         self.databasePath = databasePath
@@ -32,7 +34,10 @@ public final class AppStartup: ObservableObject {
                 state = try AppState(databasePath: databasePath, defaultCaptureMode: .systemAndMicrophone)
             }
             errorMessage = nil
+            controlServer = nil
+            controlServer = state.map { ControlServer(state: $0) }
         } catch {
+            controlServer = nil
             state = nil
             errorMessage = error.localizedDescription
         }

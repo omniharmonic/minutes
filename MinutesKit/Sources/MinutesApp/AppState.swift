@@ -88,8 +88,11 @@ public final class AppState: ObservableObject {
     @Published public var isFinalizingRecording = false
     @Published public var captureSourceDirectory: URL?
     private var recordingUsesSystem = false
+    private var recordingIncludesMicrophone = false
     #if os(macOS)
     var systemCapturePreflight: () -> Bool = { CGPreflightScreenCaptureAccess() }
+    /// Checked (never requested) by control-socket starts, which have no one to answer a prompt.
+    var microphoneAuthorized: () -> Bool = { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
     private var systemRecorder: any SystemAudioRecording = SystemAudioCaptureService()
     #endif
     @Published public var isRecording: Bool = false
@@ -149,6 +152,9 @@ public final class AppState: ObservableObject {
     @Published public var recordingConsentAcknowledged = false { didSet { preferences.set(recordingConsentAcknowledged, forKey: "recordingConsentAcknowledged") } }
     @Published public var parachuteFolder = ParachuteMeetingNote.defaultFolder { didSet { preferences.set(parachuteFolder, forKey: "parachuteFolder") } }
     @Published public var autoExportParachute = false { didSet { preferences.set(autoExportParachute, forKey: "autoExportParachute") } }
+    /// Lets local automation (Omni, minutes-mcp) drive recordings over a Unix socket. Off by default.
+    @Published public var controlSocketEnabled = false { didSet { preferences.set(controlSocketEnabled, forKey: "controlSocketEnabled") } }
+    @Published public internal(set) var controlSocketMessage = ""
     /// How confident Minutes must be to name speakers on its own (on by default, Balanced).
     @Published public var speakerAutoLabelPolicy: SpeakerAutoLabelPolicy = .default {
         didSet { if let data = try? JSONEncoder().encode(speakerAutoLabelPolicy) { preferences.set(data, forKey: "speakerAutoLabelPolicy") } }
@@ -233,7 +239,7 @@ public final class AppState: ObservableObject {
     private var recordingMeetingId: String? { didSet { objectWillChange.send() } }
     
     private let recordingModelReadiness: @Sendable () -> (ready: Bool, reason: String)
-    private let recordingEnvironmentPreflight: (@Sendable () async throws -> Void)?
+    let recordingEnvironmentPreflight: (@Sendable () async throws -> Void)?
     private let audioDirectory: URL?
     private let captureStart: (URL) throws -> Void
     private let captureStop: () throws -> URL?
@@ -313,6 +319,7 @@ public final class AppState: ObservableObject {
         self.welcomeCompleted = preferences.object(forKey: "welcomeCompleted") as? Bool ?? hasMeetings
         self.recordingConsentAcknowledged = preferences.object(forKey: "recordingConsentAcknowledged") as? Bool ?? hasMeetings
         self.autoExportParachute = preferences.bool(forKey: "autoExportParachute")
+        self.controlSocketEnabled = preferences.bool(forKey: "controlSocketEnabled")
         self.speakerAutoLabelPolicy = preferences.data(forKey: "speakerAutoLabelPolicy")
             .flatMap { try? JSONDecoder().decode(SpeakerAutoLabelPolicy.self, from: $0) } ?? .default
         self.iCloudSyncEnabled = preferences.bool(forKey: "iCloudSyncEnabled")
@@ -340,14 +347,31 @@ public final class AppState: ObservableObject {
     public convenience init(store: MinutesStore, audioDirectory: URL, systemRecorder: any SystemAudioRecording,
         preferences: UserDefaults = .standard,
         recordingModelReadiness: @escaping @Sendable () -> (ready: Bool, reason: String) = { ModelManager.shared.diarizationReadiness() },
+        recordingEnvironmentPreflight: (@Sendable () async throws -> Void)? = nil,
         processAudio: @escaping @Sendable (String, URL, DiarizationConfig) async throws -> PipelineResult = { try await PipelineOrchestrator().process(meetingId: $0, audioURL: $1, config: $2) }) throws {
-        try self.init(store: store, audioDirectory: audioDirectory, preferences: preferences, recordingModelReadiness: recordingModelReadiness, processAudio: processAudio)
+        try self.init(store: store, audioDirectory: audioDirectory, preferences: preferences, recordingModelReadiness: recordingModelReadiness,
+                      recordingEnvironmentPreflight: recordingEnvironmentPreflight, processAudio: processAudio)
         self.systemRecorder = systemRecorder
     }
 
     public func startSystemMeeting(event: CalendarMeetingEvent? = nil, includeMicrophone: Bool = true) async {
-        guard requireRecordingModels() else { return }
-        guard !isRecording, !isProcessing, !isStartingRecording, !isFinalizingRecording else { return }
+        _ = try? await beginSystemMeeting(event: event, includeMicrophone: includeMicrophone)
+    }
+
+    enum RecordingStartError: Error {
+        case notReady, busy
+        case failed(any Error)
+    }
+
+    /// Starts system capture and returns the new meeting's id once the recorder
+    /// is running. `title` replaces the event or default title and is never
+    /// renamed automatically. With `replacesCalendarEventID`, `calendarEventID`
+    /// (possibly nil) is stored instead of the event's own id.
+    @discardableResult
+    func beginSystemMeeting(event: CalendarMeetingEvent? = nil, includeMicrophone: Bool = true,
+                            title: String? = nil, replacesCalendarEventID: Bool = false, calendarEventID: String? = nil) async throws -> String {
+        guard requireRecordingModels() else { throw RecordingStartError.notReady }
+        guard !isRecording, !isProcessing, !isStartingRecording, !isFinalizingRecording else { throw RecordingStartError.busy }
         lastCaptureNotice = nil
         AudioPlaybackService.shared.stop()
         isStartingRecording = true
@@ -355,26 +379,29 @@ public final class AppState: ObservableObject {
         let id = UUID().uuidString.lowercased()
         let base = audioDirectory ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/Minutes/Audio", isDirectory: true)
         let directory = base.appendingPathComponent(id, isDirectory: true)
-        var meeting = Meeting(id: id, title: event?.title ?? "Meeting \(Date().formatted(date: .abbreviated, time: .shortened))", status: "starting", audioPath: nil)
+        var meeting = Meeting(id: id, title: title ?? event?.title ?? "Meeting \(Date().formatted(date: .abbreviated, time: .shortened))", status: "starting", audioPath: nil)
         meeting.platform = "system_audio"
         do {
             try store.saveMeeting(meeting)
             try fileNewMeetingInSelectedFolder(id: meeting.id)
             if let event { meeting = try CalendarMeetingBinder.bind(meetingId: id, event: event, store: store) }
+            if let title { meeting.title = title }
+            if replacesCalendarEventID { meeting.calendarEventId = calendarEventID }
             try await systemRecorder.startRecording(to: directory, includeMicrophone: includeMicrophone)
             meeting.status = "recording"
             try store.saveMeeting(meeting)
         } catch {
             if systemRecorder.capturing { _ = try? await systemRecorder.stopRecording() }
             meeting.status = "failed"
-            do { try store.saveMeeting(meeting) } catch { statusMessage = "Recording failed; could not save failure: \(error.localizedDescription)"; return }
+            do { try store.saveMeeting(meeting) } catch { statusMessage = "Recording failed; could not save failure: \(error.localizedDescription)"; throw RecordingStartError.failed(error) }
             statusMessage = "System recording failed: \(error.localizedDescription)"
             captureSourceDirectory = FileManager.default.fileExists(atPath: directory.path) ? directory : nil
             loadInitialData(); selectMeeting(id: id)
-            return
+            throw RecordingStartError.failed(error)
         }
         recordingUsesSystem = true
-        recordingPlaceholderTitle = event == nil ? meeting.title : nil
+        recordingIncludesMicrophone = includeMicrophone
+        recordingPlaceholderTitle = event == nil && title == nil ? meeting.title : nil
         recordingMeetingId = id
         captureSourceDirectory = directory
         isRecording = true; recordingDuration = 0; recordingMeter.reset(level: nil); recordingBookmarks = []
@@ -396,11 +423,12 @@ public final class AppState: ObservableObject {
             if self.systemRecorder.captureError != nil { Task { await self.stopAndProcessMeeting() } }
         }
         loadInitialData(); selectMeeting(id: id)
+        return id
     }
     #endif
 
     @Published public private(set) var recordingModelsReady = false
-    @Published public private(set) var isPreparingRecording = false
+    @Published public internal(set) var isPreparingRecording = false
     public var activeRecordingMeetingID: String? { recordingMeetingId }
     public var canStartRecording: Bool { recordingModelsReady && !isRecording && !isProcessing && !isStartingRecording && !isFinalizingRecording && !isSettingUpSpeechModels && !isPreparingRecording }
     public func prepareRecording() async -> Bool {
@@ -774,7 +802,13 @@ public final class AppState: ObservableObject {
     
     /// The source of the recording in progress, which for a scheduled meeting
     /// can differ from the saved choice used by Record.
-    @Published public private(set) var activeCaptureMode: CaptureMode?
+    @Published public internal(set) var activeCaptureMode: CaptureMode?
+    /// The source the running recording actually uses (after any fallback), or nil when idle.
+    public var recordingCaptureMode: CaptureMode? {
+        guard isRecording else { return nil }
+        guard recordingUsesSystem else { return .microphone }
+        return recordingIncludesMicrophone ? .systemAndMicrophone : .systemAudio
+    }
     public var displayedCaptureMode: CaptureMode { isRecording || isStartingRecording ? (activeCaptureMode ?? captureMode) : captureMode }
 
     /// Recordings started from the calendar (prompt or Upcoming) are calls with

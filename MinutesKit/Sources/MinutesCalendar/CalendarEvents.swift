@@ -19,6 +19,11 @@ public struct CalendarMeetingAttendee: Codable, Sendable, Equatable, Identifiabl
     public var isOrganizer: Bool
     public let responseStatus: String
     public var id: String { email ?? displayName }
+
+    public init(displayName: String, email: String?, isCurrentUser: Bool = false, isOrganizer: Bool = false, responseStatus: String = "unknown") {
+        self.displayName = displayName; self.email = email; self.isCurrentUser = isCurrentUser
+        self.isOrganizer = isOrganizer; self.responseStatus = responseStatus
+    }
 }
 
 public enum CalendarParticipantMapper {

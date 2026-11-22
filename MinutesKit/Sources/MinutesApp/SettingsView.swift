@@ -52,6 +52,14 @@ public struct SettingsView: View {
                 }
                 .disabled(appState.isRecording || appState.isStartingRecording)
             }
+            Section {
+                Toggle("Allow local automation to control recordings", isOn: $appState.controlSocketEnabled)
+                if appState.controlSocketEnabled && !appState.controlSocketMessage.isEmpty {
+                    Text(appState.controlSocketMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            } header: { Text("Automation") } footer: {
+                Text("Agents on this Mac (for example through minutes-mcp) can start, stop and review recordings over a private socket that only your user account can open. Nothing is reachable from the network.")
+            }
             #endif
             Section("Meeting folders") {
                 Button("Recently Deleted", systemImage: "trash") { showingTrash = true }
