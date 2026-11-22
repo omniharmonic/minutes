@@ -397,59 +397,25 @@ struct MinutesCLI {
                 }
                 
                 let shouldLearn = args.contains("--learn")
-                if shouldLearn && (cluster.embeddingModel != SpeakerEmbeddingModel.trainedID || cluster.centroid.count != 256 || !cluster.centroid.allSatisfy(\.isFinite)) {
-                    print("Cannot learn from this cluster: reprocess with the trained embedding model first. Assignment without --learn remains available.")
-                    exit(1)
-                }
                 // Resolve name / person
                 let displayName = targetIdentity.contains("@") ? NameResolver.resolveDisplayName(fromEmail: targetIdentity) : targetIdentity
                 let email = targetIdentity.contains("@") ? NameResolver.cleanEmail(targetIdentity) : ""
-                
-                // Find or create Person
-                let people = store.listPeople()
-                var person = people.first(where: { p in
-                    email.isEmpty ? p.displayName.lowercased() == displayName.lowercased() : p.emails.contains { NameResolver.cleanEmail($0) == email }
-                })
-                
-                if person == nil {
-                    let newPerson = Person(displayName: displayName, emails: email.isEmpty ? [] : [email])
-                    try store.savePerson(newPerson)
-                    person = newPerson
+
+                // The same store path as the app's speaker review and control socket:
+                // person, cluster, the cluster's transcript lines and (with --learn) the voice.
+                let outcome: SpeakerAssignment.Outcome
+                do {
+                    outcome = try SpeakerAssignment.assign(store: store, meetingID: meetingId, clusterID: cluster.id,
+                        displayName: displayName, email: email.isEmpty ? nil : email, learn: shouldLearn)
+                } catch SpeakerAssignmentError.cannotLearn {
+                    print("Cannot learn from this cluster: reprocess with the trained embedding model first (at least 20 s of speech). Assignment without --learn remains available.")
+                    exit(1)
                 }
-                
-                guard let assignedPerson = person else { exit(1) }
-                
-                // Update cluster
-                var updatedCluster = cluster
-                updatedCluster.personId = assignedPerson.id
-                updatedCluster.label = assignedPerson.displayName
-                updatedCluster.assignment = "user"
-                try store.saveSpeakerClusters([updatedCluster])
-                
-                // Voice enrollment requires explicit consent and trained model provenance.
-                if shouldLearn && !cluster.centroid.isEmpty {
-                    let vp = Voiceprint(
-                        personId: assignedPerson.id,
-                        model: SpeakerEmbeddingModel.trainedID,
-                        dim: cluster.centroid.count,
-                        vector: cluster.centroid,
-                        speechSeconds: cluster.speechSeconds
-                    )
-                    try store.saveVoiceprint(vp)
-                    print("🧠 Enrolled voiceprint (\(cluster.centroid.count)-dim) for \(assignedPerson.displayName).")
+                let assignedPerson = outcome.person
+                if let voiceprint = outcome.voiceprint {
+                    print("🧠 Enrolled voiceprint (\(voiceprint.vector.count)-dim) for \(assignedPerson.displayName).")
                 }
-                
-                // Update utterances speaker name
-                let utterances = store.listUtterances(meetingId: meetingId)
-                var updatedUtterances: [Utterance] = []
-                for var u in utterances {
-                    if u.clusterId == cluster.id {
-                        u.speakerName = assignedPerson.displayName
-                    }
-                    updatedUtterances.append(u)
-                }
-                try store.saveUtterances(updatedUtterances)
-                
+
                 print("✅ Assigned \(targetLabel) to \(assignedPerson.displayName) in meeting \(meetingId).")
                 
             case "suggest-title":
