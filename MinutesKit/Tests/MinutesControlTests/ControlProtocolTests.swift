@@ -85,6 +85,23 @@ struct ControlProtocolTests {
         #expect(try ControlMarkParams(params: [:]).label == nil)
     }
 
+    @Test("clip params: ids required, max_seconds a number from 3 to 20, default 10")
+    func clipParams() throws {
+        #expect(try ControlClipParams(params: ["meeting_id": "m", "cluster_id": "c"]) == ControlClipParams(meetingID: "m", clusterID: "c", maxSeconds: 10))
+        #expect(try ControlClipParams(params: ["meeting_id": "m", "cluster_id": "c", "max_seconds": 3]).maxSeconds == 3)
+        #expect(try ControlClipParams(params: ["meeting_id": "m", "cluster_id": "c", "max_seconds": 20]).maxSeconds == 20)
+        #expect(try ControlClipParams(params: ["meeting_id": "m", "cluster_id": "c", "max_seconds": .null]).maxSeconds == 10)
+        let invalid: [[String: JSONValue]] = [
+            [:], ["meeting_id": "m"], ["cluster_id": "c"], ["meeting_id": "m", "cluster_id": 4],
+            ["meeting_id": "m", "cluster_id": "c", "max_seconds": 2.9], ["meeting_id": "m", "cluster_id": "c", "max_seconds": 21],
+            ["meeting_id": "m", "cluster_id": "c", "max_seconds": "10"], ["meeting_id": "m", "cluster_id": "c", "max_seconds": .number(.nan)]
+        ]
+        for params in invalid {
+            do { _ = try ControlClipParams(params: params); Issue.record("accepted \(params)") }
+            catch { #expect(error.code == .badRequest) }
+        }
+    }
+
     @Test("Line framing splits lines, strips CR, skips blanks and caps length")
     func framing() {
         var framer = LineFramer(limit: 8)

@@ -23,7 +23,7 @@ public struct ControlError: Error, Sendable, Equatable, LocalizedError {
 }
 
 public enum ControlMethod: String, Sendable, CaseIterable {
-    case status, start, stop, mark, get, assign, export
+    case status, start, stop, mark, get, assign, export, clip
 }
 
 /// One request line: `{"id": <any>, "method": "<name>", "params": {...}}`.
@@ -193,6 +193,30 @@ public struct ControlAssignParams: Sendable, Equatable {
                   clusterID: try ControlParams.requiredString(params, "cluster_id"),
                   name: try ControlParams.requiredString(params, "name"),
                   email: try ControlParams.optionalString(params, "email"), learn: learn)
+    }
+}
+
+public struct ControlClipParams: Sendable, Equatable {
+    public static let defaultMaxSeconds = 10.0
+    public static let allowedMaxSeconds: ClosedRange<Double> = 3...20
+
+    public let meetingID: String
+    public let clusterID: String
+    public let maxSeconds: Double
+
+    public init(meetingID: String, clusterID: String, maxSeconds: Double = defaultMaxSeconds) {
+        self.meetingID = meetingID; self.clusterID = clusterID; self.maxSeconds = maxSeconds
+    }
+
+    public init(params: [String: JSONValue]) throws(ControlError) {
+        let maxSeconds: Double
+        switch params["max_seconds"] {
+        case nil, .null?: maxSeconds = Self.defaultMaxSeconds
+        case .number(let value)? where value.isFinite && Self.allowedMaxSeconds.contains(value): maxSeconds = value
+        default: throw .badRequest("\"max_seconds\" must be a number from 3 to 20")
+        }
+        self.init(meetingID: try ControlParams.requiredString(params, "meeting_id"),
+                  clusterID: try ControlParams.requiredString(params, "cluster_id"), maxSeconds: maxSeconds)
     }
 }
 

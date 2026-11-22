@@ -16,6 +16,7 @@ func printHelp() {
       minutes-cli recover-audio <meeting-id> [--data-dir <path>]
       minutes-cli process <meeting-id>
       minutes-cli assign <meeting-id> <cluster-label>=<name-or-email> [--learn]
+      minutes-cli clip <meeting-id> <cluster-id> [--max-seconds 10]
       minutes-cli summarize <meeting-id>
       minutes-cli export <meeting-id> [--target parachute|markdown] [--output-dir <directory>]
       minutes-cli find-transcript <meeting-id> <query> [--data-dir <path>]
@@ -418,6 +419,32 @@ struct MinutesCLI {
 
                 print("✅ Assigned \(targetLabel) to \(assignedPerson.displayName) in meeting \(meetingId).")
                 
+            case "clip":
+                guard args.count >= 4, let meeting = store.getMeeting(id: args[2]) else {
+                    print("Usage: minutes-cli clip <meeting-id> <cluster-id> [--max-seconds 10]")
+                    exit(1)
+                }
+                let clusters = store.listSpeakerClusters(meetingId: meeting.id)
+                guard let cluster = clusters.first(where: { $0.id == args[3] || $0.label.lowercased() == args[3].lowercased() }) else {
+                    print("Cluster \(args[3]) not found in meeting \(meeting.id).")
+                    exit(1)
+                }
+                var maxSeconds = SpeakerClip.defaultMaxSeconds
+                if let index = args.firstIndex(of: "--max-seconds"), index + 1 < args.count {
+                    guard let value = Double(args[index + 1]), SpeakerClip.allowedMaxSeconds.contains(value) else {
+                        print("--max-seconds must be a number from 3 to 20.")
+                        exit(1)
+                    }
+                    maxSeconds = value
+                }
+                let clip = try SpeakerClip.make(meeting: meeting, cluster: cluster, clusters: clusters,
+                    utterances: store.listUtterances(meetingId: meeting.id), maxSeconds: maxSeconds)
+                print(clip.url.path)
+                print(String(format: "%.2f s", clip.duration))
+                for segment in clip.segments {
+                    print(String(format: "  %.2f–%.2f ", segment.start, segment.end) + segment.text)
+                }
+
             case "suggest-title":
                 guard args.count >= 3, store.getMeeting(id: args[2]) != nil else {
                     print("Usage: minutes-cli suggest-title <meeting-id> [--data-dir <path>]")

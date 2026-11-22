@@ -39,13 +39,16 @@ import Testing
         let reply = try #require(try await call(offline, ["jsonrpc": "2.0", "id": 4, "method": "tools/list"]))
         let tools = try #require(reply["result"]?["tools"]?.arrayValue)
         #expect(tools.compactMap { $0["name"]?.stringValue } == ["minutes_status", "minutes_start", "minutes_stop", "minutes_mark",
-                                                                  "minutes_get", "minutes_assign", "minutes_export"])
+                                                                  "minutes_get", "minutes_assign", "minutes_export", "minutes_clip"])
         for tool in tools {
             #expect(tool["inputSchema"]?["type"] == "object")
             #expect(tool["description"]?.stringValue?.isEmpty == false)
         }
         let start = try #require(tools.first { $0["name"] == "minutes_start" })
         #expect(start["inputSchema"]?["required"] == ["title"])
+        let clip = try #require(tools.first { $0["name"] == "minutes_clip" })
+        #expect(clip["inputSchema"]?["required"] == ["meeting_id", "cluster_id"])
+        #expect(clip["inputSchema"]?["properties"]?["max_seconds"]?["maximum"] == 20)
     }
 
     @Test("tools/call relays to a socket server and returns its result as text")

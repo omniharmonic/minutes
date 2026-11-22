@@ -25,6 +25,7 @@ extension AppState {
             case .get: result = try controlGet(ControlMeetingParams(params: request.params))
             case .assign: result = try controlAssign(ControlAssignParams(params: request.params))
             case .export: result = try await controlExport(ControlMeetingParams(params: request.params))
+            case .clip: result = try await controlClip(ControlClipParams(params: request.params))
             }
             return ControlResponse(id: request.id, result: result)
         } catch let error as ControlError {
@@ -212,6 +213,42 @@ extension AppState {
         } catch let error as VoiceEnrollmentError {
             throw ControlError(.badRequest, error.localizedDescription)
         }
+    }
+
+    func controlClip(_ params: ControlClipParams) async throws -> JSONValue {
+        let directory = controlClipsDirectory
+        // Old clips go on every call, whatever its outcome.
+        await Task.detached { SpeakerClip.prune(directory: directory) }.value
+        guard let meeting = store.getMeeting(id: params.meetingID) else { throw ControlError(.notFound, "Meeting \(params.meetingID) was not found.") }
+        // Clusters and audio are rewritten until processing finishes.
+        guard !["starting", "recording", "processing"].contains(meeting.status) else {
+            throw ControlError(.busy, "Meeting \(meeting.id) is \(meeting.status); clip speakers after processing finishes.")
+        }
+        let clusters = store.listSpeakerClusters(meetingId: meeting.id)
+        guard let cluster = clusters.first(where: { $0.id == params.clusterID }) else {
+            throw ControlError(.notFound, "Cluster \(params.clusterID) was not found in meeting \(meeting.id).")
+        }
+        let utterances = store.listUtterances(meetingId: meeting.id)
+        let maxSeconds = params.maxSeconds
+        let output: SpeakerClip.Output
+        do {
+            output = try await Task.detached {
+                try SpeakerClip.make(meeting: meeting, cluster: cluster, clusters: clusters, utterances: utterances,
+                                     maxSeconds: maxSeconds, directory: directory)
+            }.value
+        } catch let error as SpeakerClipError {
+            switch error {
+            case .noTimedUtterances: throw ControlError(.badRequest, error.localizedDescription)
+            case .audioUnavailable, .encodingFailed: throw ControlError(.internal, error.localizedDescription)
+            }
+        }
+        return [
+            "path": .string(output.url.path),
+            "duration_s": .number((output.duration * 100).rounded() / 100),
+            "segments": .array(output.segments.map {
+                ["start": .number($0.start), "end": .number($0.end), "text": .string($0.text)]
+            })
+        ]
     }
 
     func controlExport(_ params: ControlMeetingParams) async throws -> JSONValue {

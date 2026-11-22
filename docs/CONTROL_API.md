@@ -42,15 +42,15 @@ If a line cannot be parsed far enough to read its `id`, the error response has `
 
 | Code | Meaning |
 |---|---|
-| `bad_request` | Malformed JSON, a missing or wrong-typed parameter, `capture_mode` other than the two allowed values, or `assign` with `learn: true` on a cluster that cannot be learned from |
+| `bad_request` | Malformed JSON, a missing or wrong-typed parameter, `capture_mode` other than the two allowed values, `assign` with `learn: true` on a cluster that cannot be learned from, `clip` with `max_seconds` outside 3–20, or `clip` on a cluster with no timed utterances |
 | `unknown_method` | The method name is not one of the methods below |
-| `busy` | A recording is active, starting or being set up, or the previous recording is still being finalized or processed. Also returned by `assign` while that meeting is `starting`, `recording` or `processing` |
+| `busy` | A recording is active, starting or being set up, or the previous recording is still being finalized or processed. Also returned by `assign` and `clip` while that meeting is `starting`, `recording` or `processing` |
 | `not_ready` | Recording consent is not acknowledged, speaker models are missing or installing, or speech recognition setup failed |
 | `permission_denied` | Screen & System Audio Recording is not allowed. For `system_and_microphone`, also returned when microphone access is not granted. The API checks permissions and never prompts |
 | `not_recording` | `stop` or `mark` was called with nothing recording, or `stop` was called while the recording is already stopping |
 | `wrong_meeting` | `stop` named a different meeting than the one recording |
 | `not_found` | Unknown meeting or cluster |
-| `internal` | Anything else; the message has the details (for example, the recorder failed to start) |
+| `internal` | Anything else; the message has the details (for example, the recorder failed to start, or `clip` found no audio file for the meeting) |
 
 ## Methods
 
@@ -140,6 +140,25 @@ Returns:
 
 This wraps `saveToParachuteVault`. It updates the earlier note for the meeting instead of creating a second one.
 
+### `clip` (build 74)
+
+Params: `{"meeting_id": "<id>", "cluster_id": "<id>", "max_seconds": 10}` (`max_seconds` is a number from 3 to 20; the default is 10)
+
+Returns:
+
+```json
+{"path": "/Users/…/Library/Application Support/Minutes/clips/<file>.m4a", "duration_s": 9.6,
+ "segments": [{"start": 12.3, "end": 17.0, "text": "…"}]}
+```
+
+- **Which speech:** the cluster's utterances that no other cluster's utterance overlaps come first, longest first (the earlier one wins a tie); overlapped ones are used only after those. Whole utterances are taken while they fit, then the next one is cut from its start to the time left (unless less than 0.5 s is left) and selection stops. The segments are played in time order with 0.25 s of silence between them; `max_seconds` includes those gaps.
+- **`segments`:** the source times (seconds into the recording) and the utterance text of each piece, in clip order. A cut piece keeps its utterance's full text.
+- **`duration_s`:** the clip's length, rounded to 0.01 s.
+- **Which audio:** the same file the speaker review screen plays (`SpeakerAudioSample.audioPath`): a Minutes capture's aligned per-source file (`system` or `microphone`) when the cluster belongs to one, otherwise the meeting's audio file. With a per-source file, only clusters of the same track count as overlapping.
+- **File:** AAC in an `.m4a`, mono, 16 kHz, about 32 kbps. Written with mode `0600` into `~/Library/Application Support/Minutes/clips/` (mode `0700`). Every call first deletes files there older than 7 days.
+- **Errors:** `not_found` for an unknown meeting or cluster; `busy` while the meeting is `starting`, `recording` or `processing`; `bad_request` when the cluster has no timed utterances; `internal` when the meeting has no audio or its file is missing.
+- **CLI:** `minutes-cli clip <meeting-id> <cluster-id> [--max-seconds 10]` runs the same code (`SpeakerClip` in MinutesSpeech).
+
 ## Example
 
 ```sh
@@ -150,7 +169,7 @@ printf '%s\n' '{"id":1,"method":"status"}' | nc -U ~/Library/Application\ Suppor
 
 A stdio MCP server. It speaks JSON-RPC 2.0 with one message per line and supports `initialize`, `notifications/initialized`, `ping`, `tools/list` and `tools/call`. It echoes the client's `protocolVersion`, or uses `2025-06-18` if the client sends none. It depends only on Foundation.
 
-- **Tools:** `minutes_status`, `minutes_start`, `minutes_stop`, `minutes_mark`, `minutes_get`, `minutes_assign` and `minutes_export`. Each takes the socket method's params as arguments.
+- **Tools:** `minutes_status`, `minutes_start`, `minutes_stop`, `minutes_mark`, `minutes_get`, `minutes_assign`, `minutes_export` and `minutes_clip` (8 tools). Each takes the socket method's params as arguments.
 - **Results:** the socket's `result` is returned as JSON text content.
 - **Errors:** a socket error becomes `isError: true` with the text `{"error": {"code": "<code>", "message": "..."}}`. If the app cannot be reached, the code is `unavailable`.
 - **Location:** `scripts/build-app.sh` bundles the binary as `Minutes.app/Contents/MacOS/minutes-mcp`. Build it alone with `swift build -c release --product minutes-mcp --package-path MinutesKit`.

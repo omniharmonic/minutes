@@ -93,6 +93,8 @@ public final class AppState: ObservableObject {
     var systemCapturePreflight: () -> Bool = { CGPreflightScreenCaptureAccess() }
     /// Checked (never requested) by control-socket starts, which have no one to answer a prompt.
     var microphoneAuthorized: () -> Bool = { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
+    /// Where control-socket `clip` writes its files (tests point it elsewhere).
+    var controlClipsDirectory: URL = SpeakerClip.defaultDirectory
     private var systemRecorder: any SystemAudioRecording = SystemAudioCaptureService()
     #endif
     @Published public var isRecording: Bool = false

@@ -59,6 +59,7 @@ import MinutesControl
         state.autoFileMeetingsEnabled = false
         state.systemCapturePreflight = { true }
         state.microphoneAuthorized = { true }
+        state.controlClipsDirectory = root.appendingPathComponent("clips")
         return Harness(state: state, store: store, recorder: recorder, root: root)
     }
 
@@ -175,6 +176,9 @@ import MinutesControl
         #expect(code(await send(h.state, "get", ["meeting_id": "missing"])) == .notFound)
         #expect(code(await send(h.state, "assign", ["meeting_id": "missing", "cluster_id": "c", "name": "A"])) == .notFound)
         #expect(code(await send(h.state, "export", ["meeting_id": "missing"])) == .notFound)
+        #expect(code(await send(h.state, "clip", ["meeting_id": "missing", "cluster_id": "c"])) == .notFound)
+        #expect(code(await send(h.state, "clip", ["meeting_id": "missing"])) == .badRequest)
+        #expect(code(await send(h.state, "clip", ["meeting_id": "m", "cluster_id": "c", "max_seconds": 30])) == .badRequest)
         #expect(code(await send(h.state, "stop", ["meeting_id": "m"])) == .notRecording)
     }
 
@@ -240,6 +244,54 @@ import MinutesControl
 
         try api.store.saveMeeting(Meeting(id: "busy", title: "Processing", status: "processing"))
         #expect(code(await send(api.state, "assign", ["meeting_id": "busy", "cluster_id": "c1", "name": "A"])) == .busy)
+    }
+
+    @Test("clip validates the meeting, cluster, status, timing and audio, then writes a mono AAC clip")
+    func clip() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.root) }
+        try reviewedMeeting(h.store)
+        // The fixture meeting has no audio file: internal, like a deleted recording.
+        #expect(code(await send(h.state, "clip", ["meeting_id": "m", "cluster_id": "nope"])) == .notFound)
+        #expect(code(await send(h.state, "clip", ["meeting_id": "m", "cluster_id": "c1"])) == .internal)
+
+        // A cluster with no timed utterances.
+        try h.store.saveSpeakerClusters([SpeakerCluster(id: "c3", meetingId: "m", trackId: "system", label: "Speaker 3")])
+        #expect(code(await send(h.state, "clip", ["meeting_id": "m", "cluster_id": "c3"])) == .badRequest)
+
+        for status in ["starting", "recording", "processing"] {
+            try h.store.saveMeeting(Meeting(id: "busy-\(status)", title: "Busy", status: status))
+            #expect(code(await send(h.state, "clip", ["meeting_id": .string("busy-\(status)"), "cluster_id": "c1"])) == .busy)
+        }
+
+        // Give the meeting 4 s of audio: c1 speaks 0–1.5 s, c2 1.5–3 s.
+        try FileManager.default.createDirectory(at: h.root, withIntermediateDirectories: true)
+        let audio = h.root.appendingPathComponent("fixture.caf")
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 64000)!
+        buffer.frameLength = 64000
+        for i in 0..<64000 { buffer.floatChannelData![0][i] = 0.1 * sin(Float(i) * 0.2) }
+        do { let file = try AVAudioFile(forWriting: audio, settings: format.settings); try file.write(from: buffer) }
+        var meeting = try #require(h.store.getMeeting(id: "m"))
+        meeting.audioPath = audio.path
+        try h.store.saveMeeting(meeting)
+
+        // A stale clip from last week is pruned by the call.
+        let clips = h.root.appendingPathComponent("clips")
+        try FileManager.default.createDirectory(at: clips, withIntermediateDirectories: true)
+        let stale = clips.appendingPathComponent("stale.m4a")
+        try Data([0]).write(to: stale)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-8 * 86400)], ofItemAtPath: stale.path)
+
+        let clipped = try result(await send(h.state, "clip", ["meeting_id": "m", "cluster_id": "c1", "max_seconds": 3]))
+        let path = try #require(clipped["path"]?.stringValue)
+        #expect(path.hasPrefix(clips.path) && path.hasSuffix(".m4a"))
+        #expect(FileManager.default.fileExists(atPath: path))
+        #expect(clipped["duration_s"] == 1.5, "\(clipped)")
+        #expect(clipped["segments"] == [["start": 0, "end": 1.5, "text": "Synthetic first"]])
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        let permissions = try FileManager.default.attributesOfItem(atPath: clips.path)[.posixPermissions] as? NSNumber
+        #expect(permissions?.int16Value == 0o700)
     }
 
     @Test("export without a connected vault reports exported false")

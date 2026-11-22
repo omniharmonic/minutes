@@ -74,7 +74,18 @@ public struct MCPServer: Sendable {
              ]),
         Tool(name: "minutes_export", method: .export,
              description: "Save the meeting's transcript, summary and notes to the connected Parachute vault, updating the earlier note if there is one.",
-             inputSchema: ["type": "object", "properties": ["meeting_id": meetingID], "required": ["meeting_id"], "additionalProperties": false])
+             inputSchema: ["type": "object", "properties": ["meeting_id": meetingID], "required": ["meeting_id"], "additionalProperties": false]),
+        Tool(name: "minutes_clip", method: .clip,
+             description: "Write a short audio clip of one speaker cluster (its clearest, non-overlapping speech in time order, 0.25 s silence between segments) as a mono AAC .m4a on this Mac. Returns the file path, its duration and the source segments (start/end seconds, text). Files are deleted after 7 days.",
+             inputSchema: [
+                "type": "object",
+                "properties": [
+                    "meeting_id": meetingID,
+                    "cluster_id": ["type": "string", "description": "Cluster id from minutes_get."],
+                    "max_seconds": ["type": "number", "minimum": 3, "maximum": 20, "default": 10, "description": "Longest clip length in seconds."]
+                ],
+                "required": ["meeting_id", "cluster_id"], "additionalProperties": false
+             ])
     ]
 
     private static let toolsByName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
