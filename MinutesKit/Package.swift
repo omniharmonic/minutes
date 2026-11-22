@@ -24,7 +24,10 @@ let package = Package(
         // Live Activity state shared with the iOS widget extension; no dependencies.
         .library(name: "MinutesActivity", targets: ["MinutesActivity"]),
         .executable(name: "MinutesApp", targets: ["MinutesApp"]),
-        .executable(name: "minutes-cli", targets: ["minutes-cli"])
+        .executable(name: "minutes-cli", targets: ["minutes-cli"]),
+        // Control socket protocol and the stdio MCP relay; Foundation only.
+        .library(name: "MinutesControl", targets: ["MinutesControl"]),
+        .executable(name: "minutes-mcp", targets: ["minutes-mcp"])
     ],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7"),
@@ -39,6 +42,8 @@ let package = Package(
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .target(name: "MinutesActivity", dependencies: []),
+        .target(name: "MinutesControl", dependencies: []),
+        .executableTarget(name: "minutes-mcp", dependencies: ["MinutesControl"]),
         .target(
             name: "MinutesSpeech",
             dependencies: ["MinutesCore", "MinutesSpeakerID", .product(name: "FluidAudio", package: "FluidAudio")]
@@ -85,6 +90,7 @@ let package = Package(
                 "MinutesExport",
                 "MinutesUI",
                 "MinutesSync",
+                "MinutesControl",
                 .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS]))
             ],
             exclude: ["Info.plist"],
@@ -131,6 +137,7 @@ let package = Package(
             dependencies: ["MinutesExport"]
         ),
         .testTarget(name: "MinutesActivityTests", dependencies: ["MinutesActivity"]),
+        .testTarget(name: "MinutesControlTests", dependencies: ["MinutesControl"]),
         .testTarget(
             name: "MinutesSyncTests",
             dependencies: ["MinutesSync"]
