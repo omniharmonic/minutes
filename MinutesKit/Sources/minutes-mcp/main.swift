@@ -16,7 +16,8 @@ while let line = readLine(strippingNewline: true) {
     let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { continue }
     let done = DispatchSemaphore(value: 0)
-    Task {
+    // Detached: top-level code is main-actor isolated and the main thread waits below.
+    Task.detached {
         if let reply = await server.handle(line: Data(trimmed.utf8)) { emit(reply) }
         done.signal()
     }
