@@ -52,7 +52,7 @@ In Cloud Console → Google Auth Platform → Branding, the privacy policy URL i
   - Give each one a Google Meet link (Add Google Meet video conferencing) and one or two of your own addresses as guests.
   - With this calendar, the video never shows real meetings or other people's addresses.
 - In Minutes → Settings → Calendar, choose **Disconnect**, so the take starts from the consent screen.
-- In Dia, stay signed in to synergy@benjaminlife.one. A password prompt during the take is fine, but don't show any two-factor codes.
+- In Dia, stay signed in to the publisher's Google account. A password prompt during the take is fine, but don't show any two-factor codes.
 - Quit or hide Messages, Signal, WhatsApp and Telegram, and turn on Do Not Disturb.
 - Open these Dia tabs in order:
   1. https://minutes.omniharmonic.com/about
@@ -70,7 +70,7 @@ In Cloud Console → Google Auth Platform → Branding, the privacy policy URL i
 1. Show the About tab, then scroll the Google section of Privacy.
 2. Switch to Minutes → Settings → Calendar → Google Calendar → **Connect Google**.
 3. In the browser:
-   - choose synergy@benjaminlife.one;
+   - choose the publisher's Google account;
    - on the consent screen, pause on the two read-only permissions ("See your calendar list" and "View events on all your calendars");
    - click **Continue / Allow**.
 4. Back in Minutes it says **Connected**, and the calendar list appears. This shows *calendarlist.readonly*.
