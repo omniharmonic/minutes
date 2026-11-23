@@ -361,3 +361,12 @@ Verification: final synthetic suite 165 discovered, 162 passed, three opt-in ski
 
 2026-11-04: Mac 72 published (v1.0.0-72, appcast serves 72). iOS 64 uploaded, delivery a26dc462-d9c0-4ca0-8c95-25b2d16e6ffa; owner adds it to Minutes Public Beta.
 
+
+### 2026-11-21 — Control socket + minutes-mcp (meeting-assistant spec Phase 1b/1c; 1a and 1d not in scope)
+- [x] `MinutesControl` module: newline-delimited JSON protocol, contract error codes, parameter validation, 0600 Unix socket server (same-uid peers, 1 MB line cap, stale-socket cleanup), blocking client.
+- [x] App: `status/start/stop/mark/get/assign/export` in `AppState+Control.swift`; server lifecycle in `ControlServer.swift`, started from `AppStartup` only while `controlSocketEnabled` is on (Settings → General → Automation). API starts never fall back to microphone-only (`permission_denied`).
+- [x] Speaker assign/rename moved from `MainWindowView` closures to AppState methods on top of `SpeakerAssignment` (MinutesSpeakerID); `minutes-cli assign` uses the same store path.
+- [x] `minutes-mcp` stdio MCP server (7 tools), bundled by `scripts/build-app.sh` as `Contents/MacOS/minutes-mcp`. Contract and Hermes config: `docs/CONTROL_API.md`.
+- [x] Tests: MinutesControlTests (protocol, socket, MCP over a fake socket server), SpeakerAssignmentTests, ControlAPITests (preflight refusal, start/stop/mark/status, error mapping, get shape, API assign == UI assign, socket → AppState).
+- [x] 2026-11-22 (build 74): `clip` method + `minutes_clip` tool (8 tools) for the speaker-review flow. Selection (`SpeakerClip.plan`, MinutesSpeech) prefers the cluster's longest non-overlapped utterances, whole then one cut, 0.25 s gaps, ≤ `max_seconds` (3–20, default 10); audio from the review screen's source (`SpeakerAudioSample.audioPath`); mono 16 kHz AAC ~32 kbps, 0600 files in a 0700 `clips/` dir pruned after 7 days. Also `minutes-cli clip`. Tests: SpeakerClipTests, ControlProtocolTests, MCPServerTests, ControlAPITests.
+- [ ] Not yet verified on the Mac mini: SSH-driven `minutes_start` → live Meet → `minutes_stop`, and the same after a reboot. Headless settings from the spec (launch at login, no Dock icon, summaries off, export held until speakers are named) are not implemented.

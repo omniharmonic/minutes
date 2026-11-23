@@ -15,6 +15,8 @@ fi
 
 echo "==> Building MinutesApp in release mode..."
 swift build "${SWIFT_BUILD_OPTIONS[@]}" -c release --product MinutesApp --package-path "$ROOT_DIR/MinutesKit"
+# The stdio MCP relay to the control socket (docs/CONTROL_API.md); Foundation only.
+swift build "${SWIFT_BUILD_OPTIONS[@]}" -c release --product minutes-mcp --package-path "$ROOT_DIR/MinutesKit"
 BIN_DIR="$(swift build "${SWIFT_BUILD_OPTIONS[@]}" -c release --show-bin-path --package-path "$ROOT_DIR/MinutesKit")"
 BIN_PATH="$BIN_DIR/MinutesApp"
 if [[ ! -f "$BIN_PATH" ]]; then
@@ -27,6 +29,9 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$BIN_PATH" "$MACOS_DIR/Minutes"
+[[ -f "$BIN_DIR/minutes-mcp" ]] || { echo "Error: minutes-mcp release binary not found in $BIN_DIR" >&2; exit 1; }
+cp "$BIN_DIR/minutes-mcp" "$MACOS_DIR/minutes-mcp"
+chmod +x "$MACOS_DIR/minutes-mcp"
 cp "$ROOT_DIR/Apps/Shared/PrivacyInfo.xcprivacy" "$RESOURCES_DIR/PrivacyInfo.xcprivacy"
 cp "$ROOT_DIR/Apps/Shared/Minutes.icns" "$RESOURCES_DIR/Minutes.icns"
 # macOS 26 reads CFBundleIconName from a compiled catalog for some surfaces
@@ -65,6 +70,12 @@ while IFS= read -r dependency; do
         *) echo "Error: Non-system dynamic dependency needs explicit embedding/rpath handling: $dependency" >&2; exit 1 ;;
     esac
 done < <(otool -L "$MACOS_DIR/Minutes" | awk 'NR > 1 { print $1 }')
+while IFS= read -r dependency; do
+    case "$dependency" in
+        /System/Library/*|/usr/lib/*) ;;
+        *) echo "Error: minutes-mcp must link system libraries only: $dependency" >&2; exit 1 ;;
+    esac
+done < <(otool -L "$MACOS_DIR/minutes-mcp" | awk 'NR > 1 { print $1 }')
 
 # Embed exactly the same privacy identity in the Mach-O and app wrapper.
 cp "$ROOT_DIR/MinutesKit/Sources/MinutesApp/Info.plist" "$CONTENTS_DIR/Info.plist"
@@ -140,6 +151,8 @@ codesign "${SPARKLE_SIGN[@]}" "$SPARKLE_EMBEDDED"
 for resource_bundle in "$RESOURCES_DIR"/*.bundle(N); do
     codesign "${SIGN_OPTIONS[@]}" "$resource_bundle"
 done
+# Helper executables in Contents/MacOS are signed before the app, without the app's entitlements.
+codesign "${SIGN_OPTIONS[@]}" --identifier ai.nosaas.minutes.mcp "$MACOS_DIR/minutes-mcp"
 codesign "${SIGN_OPTIONS[@]}" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
 
 echo "==> Verifying code signature..."

@@ -31,6 +31,23 @@ public enum CaptureInputDevices {
         #endif
     }
 
+    /// Names of the system default input and output devices (for example
+    /// "BlackHole 2ch"), read-only; nil when there is none or on iOS.
+    public static func defaultDeviceNames() -> (input: String?, output: String?) {
+        #if os(macOS)
+        func name(_ selector: AudioObjectPropertySelector) -> String? {
+            var device = AudioDeviceID(kAudioObjectUnknown)
+            guard read(selector, device: AudioObjectID(kAudioObjectSystemObject), value: &device), device != kAudioObjectUnknown else { return nil }
+            var value: CFString = "" as CFString
+            guard read(kAudioObjectPropertyName, device: device, value: &value) else { return nil }
+            return value as String
+        }
+        return (name(kAudioHardwarePropertyDefaultInputDevice), name(kAudioHardwarePropertyDefaultOutputDevice))
+        #else
+        return (nil, nil)
+        #endif
+    }
+
     static func routeIdentifiers() -> [String] {
         #if os(macOS)
         return defaultDevice().map { [String($0)] } ?? []
