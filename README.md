@@ -116,3 +116,20 @@ The Mac recorder now offers **microphone** or **Mac call audio + microphone**. C
 Minutes follows the system appearance with native navigation/toolbars and Liquid Glass control surfaces on macOS/iOS 26+, with material fallbacks on supported older systems. Notes/transcripts use readable content surfaces. The Mac library searches meeting titles and transcripts; notes and summary Markdown can be edited and exported explicitly. Public connection settings persist separately from Keychain credentials.
 
 An explicit `MINUTES_LIBRARY_DIRECTORY=/path/to/isolated-library` launch uses a separate database, audio directory, export directory and preferences profile for safe previews/testing. It does not use a hidden temporary fallback on storage failure.
+
+## Licence
+
+Minutes is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License, version 3** (AGPL-3.0-only) as published by the Free Software Foundation. See [`LICENSE`](LICENSE) for the full text.
+
+Copyright (C) 2026 the Minutes contributors.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+### Third-party components
+
+Minutes links or bundles third-party code under its own permissive licences, all compatible with AGPL-3.0:
+
+- [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache-2.0) and the notices it ships (fastcluster BSD-2-Clause, VBx Apache-2.0, Kokoro ANE Apache-2.0, NeMo text processing Apache-2.0 / MIT, Japanese, Spanish and French G2P word lists MIT / BSD / Apache-2.0). Full texts are in [`Apps/Shared/Licenses`](Apps/Shared/Licenses).
+- [Sparkle](https://github.com/sparkle-project/Sparkle) (MIT) for Mac updates.
+
+Speech and speaker model weights are not bundled; model setup downloads them explicitly and they stay under their upstream licences.
