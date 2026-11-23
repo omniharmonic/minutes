@@ -13,7 +13,7 @@ mid,audio,status=c.execute('select id,audio_path,status from meeting where id=?'
 if not audio: raise SystemExit('recording has not finalized')
 d=pathlib.Path(audio).parent;m=json.loads((d/'capture.json').read_text())
 def pcm(p):
- raw=subprocess.run(['/Users/benjaminlife/.local/bin/ffmpeg','-v','error','-i',str(p),'-ar','4000','-ac','1','-f','f32le','pipe:1'],capture_output=True,check=True).stdout
+ raw=subprocess.run(['ffmpeg','-v','error','-i',str(p),'-ar','4000','-ac','1','-f','f32le','pipe:1'],capture_output=True,check=True).stdout
  return np.frombuffer(raw,dtype='<f4').astype(np.float64)
 def match(x,r):
  r=r-r.mean();v=correlate(x,r,mode='valid',method='fft');en=np.r_[0,np.cumsum(x.astype(float)**2)];den=np.sqrt(np.maximum(en[len(r):]-en[:-len(r)],1e-20)*np.sum(r*r));scores=np.divide(v,den,out=np.zeros_like(v),where=den>1e-6);k=int(np.argmax(scores));return k/4000,float(np.clip(scores[k],-1,1))

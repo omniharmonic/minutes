@@ -192,7 +192,7 @@ In the open-source Community Edition, **speaker diarization is absent or stubbed
   - For a free open-source app, EventKit is vastly superior. Google API should only exist as an optional BYO-OAuth client setting.
 
 ### 6.2 Parachute Vault Integration (Verified from `omni-app`)
-Inspected local codebase: `/Users/benjaminlife/dev/omni-app/apps/server/src/worker/{fathom.ts, calendar.ts, people.ts, transcript-match.ts}` and desktop Rust client `parachute.rs`.
+Inspected local codebase: `apps/server/src/worker/{fathom.ts, calendar.ts, people.ts, transcript-match.ts}` and desktop Rust client `parachute.rs`.
 
 * **Base Endpoint:** `http://localhost:1940/vault/{vault}/api` (default vault: `default`).
 * **Authentication:** `Authorization: Bearer <JWT>` minted via `parachute auth mint-token --scope vault:default:write`.
